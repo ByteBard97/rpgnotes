@@ -5,7 +5,7 @@ Tests for the GUI module.
 import pytest
 from PyQt6.QtWidgets import QApplication, QToolBar, QLabel
 from PyQt6.QtCore import Qt, QUrl, QMimeData
-from gui import MainWindow, FileDropFrame
+from gui import MainWindow, FileDropFrame, ProgressWidget
 
 @pytest.fixture
 def app():
@@ -27,8 +27,8 @@ def test_window_title(window):
 
 def test_window_minimum_size(window):
     """Test that the window has the correct minimum size."""
-    assert window.minimumWidth() == 1000
-    assert window.minimumHeight() == 700
+    assert window.minimumWidth() == 1200
+    assert window.minimumHeight() == 800
 
 def test_file_tree_exists(window):
     """Test that the file tree view is created with correct filters."""
@@ -71,13 +71,20 @@ def test_status_bar_exists(window):
     assert window.statusBar is not None
     assert window.statusBar.currentMessage() == "Ready"
 
-def test_progress_bar_exists(window):
-    """Test that the progress bar exists and is initially hidden."""
-    assert window.progress_bar is not None
-    assert not window.progress_bar.isVisible()
+def test_progress_widget_exists(window):
+    """Test that the progress widget exists and is initially hidden."""
+    assert window.progress_widget is not None
+    assert isinstance(window.progress_widget, ProgressWidget)
+    assert not window.progress_widget.isVisible()
 
 def test_drop_zone_exists(window):
     """Test that the file drop zone exists."""
     assert window.drop_zone is not None
     assert window.drop_zone.acceptDrops()
-    assert isinstance(window.drop_zone, FileDropFrame) 
+    assert isinstance(window.drop_zone, FileDropFrame)
+
+def test_preview_area_exists(window):
+    """Test that the preview area exists."""
+    assert window.preview_area is not None
+    assert window.preview_area.wordWrap()
+    assert "Markdown preview will appear here..." in window.preview_area.text() 
