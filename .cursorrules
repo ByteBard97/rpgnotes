@@ -1,5 +1,7 @@
 # Cursor Rules
 - python 3.10+
+- DO NOT MODIFY main.py this is our reference implementation
+
 - be sure to use a python venv for this project
 - max file length 300 lines
 - max method length 100 lines
