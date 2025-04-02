@@ -10,8 +10,10 @@ import time
 import json
 import zipfile
 import torch
+import traceback
+import numpy as np
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple, Any
 
 import torch
 from tqdm import tqdm
@@ -20,6 +22,21 @@ from transformers import (
     AutoProcessor, 
     pipeline
 )
+
+# Try to import audio processing libraries with fallbacks
+try:
+    import soundfile as sf
+except ImportError:
+    print("WARNING: soundfile not installed. Install with 'pip install soundfile'")
+    sf = None
+
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    print("WARNING: pydub not installed. Install with 'pip install pydub'")
+    AudioSegment = None
+    PYDUB_AVAILABLE = False
 
 from config import (
     AUDIO_SOURCE_DIR, 
@@ -148,12 +165,61 @@ class AudioProcessor:
 
         except zipfile.BadZipFile:
             print(f"Error: {newest_zip} is not a valid zip file.")
+            
+    def load_audio_file(self, audio_path: Path) -> Tuple[np.ndarray, int]:
+        """
+        Load an audio file using the best available method.
+        
+        Args:
+            audio_path: Path to the audio file
+            
+        Returns:
+            Tuple of (audio_data, sample_rate)
+        """
+        file_path_str = str(audio_path)
+        
+        # Try pydub first if available (handles many formats with or without ffmpeg)
+        if PYDUB_AVAILABLE:
+            try:
+                print(f"Loading with pydub: {file_path_str}")
+                audio = AudioSegment.from_file(file_path_str)
+                # Convert to numpy array for whisper
+                samples = np.array(audio.get_array_of_samples())
+                if audio.channels > 1:
+                    # If stereo or multi-channel, average all channels
+                    samples = samples.reshape((-1, audio.channels)).mean(axis=1)
+                # Convert to float32 and normalize to [-1, 1]
+                samples = samples.astype(np.float32) / (2**15 if audio.sample_width == 2 else 2**31)
+                return samples, audio.frame_rate
+            except Exception as e:
+                print(f"Pydub error: {e}, falling back to soundfile")
+        
+        # Try soundfile as fallback
+        if sf is not None:
+            try:
+                print(f"Loading with soundfile: {file_path_str}")
+                audio_data, sample_rate = sf.read(file_path_str)
+                return audio_data, sample_rate
+            except Exception as e:
+                print(f"Soundfile error: {e}")
+        
+        # Last resort - try using HF audio loading directly
+        try:
+            from datasets import load_dataset
+            print(f"Loading with datasets: {file_path_str}")
+            # Create temporary dataset-like dict
+            audio_dict = {"audio": {"path": file_path_str}}
+            # The feature extractor will handle loading directly
+            return audio_dict, None
+        except Exception as e:
+            print(f"Dataset loading error: {e}")
+            raise ValueError(f"Could not load audio file {audio_path} with any available method")
     
     def transcribe_audio(self) -> None:
         """
         Transcribe FLAC audio files using Whisper from Hugging Face Transformers.
         """
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
         torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         
         should_transcribe = False
@@ -192,18 +258,20 @@ class AudioProcessor:
                 device=device,
             )
             
-            # Load the initial prompt
-            with open(self.prompt_file, "r") as f:
-                initial_prompt = f.read().strip()
-                
-            # Configure generation parameters to include timestamps
-            generate_kwargs = {
-                "language": "english",  # Can be changed to match your language
-                "task": "transcribe",
-                "initial_prompt": initial_prompt,
-                "return_timestamps": True
-            }
+            print(f"Model successfully loaded on {device}")
             
+            # If GPU, verify it's actually using it
+            if torch.cuda.is_available():
+                gpu_tensors = any(param.is_cuda for param in model.parameters())
+                print(f"Model loaded on GPU: {gpu_tensors}")
+                
+            # Load the initial prompt if available
+            initial_prompt = None
+            if self.prompt_file and os.path.exists(self.prompt_file):
+                with open(self.prompt_file, "r") as f:
+                    initial_prompt = f.read().strip()
+                    print(f"Using initial prompt from {self.prompt_file}")
+                
             # Process each audio file
             for audio_file in audio_files:
                 json_output_path = self.transcriptions_dir / f"{audio_file.stem}.json"
@@ -213,28 +281,66 @@ class AudioProcessor:
                 
                 print(f"Transcribing {audio_file.name}...")
                 try:
-                    # Transcribe with timestamps
-                    result = pipe(
-                        str(audio_file),
-                        chunk_length_s=30,  # Process 30 seconds at a time
-                        stride_length_s=[5, 5],  # Overlap between chunks
-                        batch_size=8,  # Adjust based on GPU memory
-                        generate_kwargs=generate_kwargs,
-                        return_timestamps=True
-                    )
+                    # Load audio using the best available method
+                    audio_data, sampling_rate = self.load_audio_file(audio_file)
+                    
+                    # Check if we got a dict (direct file reference) or array
+                    if isinstance(audio_data, dict):
+                        print("Using file path directly for transcription")
+                        input_data = audio_data
+                        is_dict_input = True
+                    else:
+                        print(f"Processing audio array (length: {len(audio_data)}, rate: {sampling_rate})")
+                        input_data = {"array": audio_data, "sampling_rate": sampling_rate}
+                        is_dict_input = False
+                        
+                        # For very long files, use chunking but we'll do it with array data
+                        max_length = 10 * 60 * sampling_rate  # 10 minutes at sampling rate
+                        use_chunking = len(audio_data) > max_length if hasattr(audio_data, '__len__') else False
+                    
+                    # Create appropriate parameters based on input type
+                    params = {
+                        "return_timestamps": True,
+                        "generate_kwargs": {
+                            "language": "en", 
+                            "task": "transcribe"
+                        }
+                    }
+                    
+                    # Add chunking parameters if needed
+                    if is_dict_input or use_chunking:
+                        params.update({
+                            "chunk_length_s": 30,
+                            "stride_length_s": [5, 5],
+                            "batch_size": 8
+                        })
+                        
+                    # Run transcription
+                    result = pipe(input_data, **params)
                     
                     # Convert the HF format to match the expected OpenAI Whisper format
-                    # This ensures compatibility with the rest of the pipeline
                     segments = []
                     
                     # Process the chunks which contain timestamp info
-                    for i, chunk in enumerate(result["chunks"]):
+                    if 'chunks' in result:
+                        for i, chunk in enumerate(result["chunks"]):
+                            segment = {
+                                "id": i,
+                                "text": chunk["text"],
+                                "start": chunk["timestamp"][0],
+                                "end": chunk["timestamp"][1],
+                                "no_speech_prob": 0.1  # Default value as HF doesn't provide this
+                            }
+                            segments.append(segment)
+                    else:
+                        # If no chunks, create a single segment with the full text
+                        audio_duration = len(audio_data) / sampling_rate if not is_dict_input else 0
                         segment = {
-                            "id": i,
-                            "text": chunk["text"],
-                            "start": chunk["timestamp"][0],
-                            "end": chunk["timestamp"][1],
-                            "no_speech_prob": 0.1  # Default value as HF doesn't provide this
+                            "id": 0,
+                            "text": result["text"],
+                            "start": 0.0,
+                            "end": float(audio_duration),
+                            "no_speech_prob": 0.1
                         }
                         segments.append(segment)
                     
@@ -243,9 +349,12 @@ class AudioProcessor:
                         json.dump(segments, f, indent=2)
                         
                     print(f"\nTranscription of '{audio_file.name}' saved to '{json_output_path}'.")
+                    print(f"Segments: {len(segments)}")
                 except Exception as e:
                     print(f"Error transcribing '{audio_file.name}': {e}")
+                    print(f"Traceback: {traceback.format_exc()}")
                     
         except Exception as e:
             print(f"Error loading Whisper model: {e}")
+            print(f"Traceback: {traceback.format_exc()}")
             print("If using CUDA, ensure you have a compatible version or use device='cpu'.") 
