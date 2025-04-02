@@ -153,19 +153,76 @@ class AudioProcessor:
                 zip_ref.extractall(self.output_dir)
             print(f"Extracted audio to: {self.output_dir}")
 
-            # Delete non-FLAC files
+            # Process each FLAC file to extract metadata
+            speaker_count = 0
             for filename in os.listdir(self.output_dir):
                 file_path = self.output_dir / filename
-                if file_path.is_file() and not filename.endswith(".flac"):
+                if file_path.is_file() and filename.endswith(".flac"):
+                    # Extract speaker info from filename
+                    # Format: craig-yyyy-mm-dd-hh-mm-ss-XXXXXXXXXX-username.flac
+                    try:
+                        # Parse the Discord username from the filename
+                        parts = filename.split('-')
+                        if len(parts) >= 8:  # Make sure we have enough parts
+                            username = parts[-1].replace('.flac', '')
+                            print(f"Found audio for user: {username}")
+                            speaker_count += 1
+                    except Exception as e:
+                        print(f"Error parsing filename {filename}: {e}")
+                elif file_path.is_file() and not filename.endswith(".flac"):
+                    # Delete non-FLAC files
                     os.remove(file_path)
                     print(f"Deleted: {file_path}")
 
+            print(f"Found {speaker_count} speaker audio files.")
             os.remove(newest_zip)
             print(f"Deleted zip file: {newest_zip}")
 
         except zipfile.BadZipFile:
             print(f"Error: {newest_zip} is not a valid zip file.")
             
+    def extract_speaker_from_filename(self, filename: str) -> str:
+        """
+        Extract the speaker name from a Craig bot filename.
+        
+        Args:
+            filename: The Craig bot filename
+            
+        Returns:
+            The extracted speaker name (Discord username)
+        """
+        try:
+            # Format: craig-yyyy-mm-dd-hh-mm-ss-XXXXXXXXXX-username.flac
+            parts = filename.split('-')
+            if len(parts) >= 8:
+                username = parts[-1].replace('.flac', '')
+                return username
+            return "unknown"
+        except Exception as e:
+            print(f"Error extracting speaker from {filename}: {e}")
+            return "unknown"
+            
+    def get_character_name(self, discord_username: str) -> str:
+        """
+        Get the character name for a Discord username from the mapping file.
+        
+        Args:
+            discord_username: The Discord username
+            
+        Returns:
+            The mapped character name, or the original username if no mapping exists
+        """
+        try:
+            from config import DISCORD_MAPPING_FILE
+            if os.path.exists(DISCORD_MAPPING_FILE):
+                with open(DISCORD_MAPPING_FILE, 'r') as f:
+                    mappings = json.load(f)
+                    return mappings.get(discord_username, discord_username)
+            return discord_username
+        except Exception as e:
+            print(f"Error loading Discord mapping for {discord_username}: {e}")
+            return discord_username
+    
     def load_audio_file(self, audio_path: Path) -> Tuple[np.ndarray, int]:
         """
         Load an audio file using the best available method.
@@ -272,14 +329,19 @@ class AudioProcessor:
                     initial_prompt = f.read().strip()
                     print(f"Using initial prompt from {self.prompt_file}")
                 
-            # Process each audio file
-            for audio_file in audio_files:
+            # Process each audio file sequentially to avoid GPU memory issues
+            print(f"Processing {len(audio_files)} audio files sequentially...")
+            for i, audio_file in enumerate(audio_files):
                 json_output_path = self.transcriptions_dir / f"{audio_file.stem}.json"
                 if json_output_path.exists():
                     print(f"Skipping '{audio_file.name}' (already transcribed).")
                     continue
                 
-                print(f"Transcribing {audio_file.name}...")
+                # Extract speaker information from filename
+                discord_username = self.extract_speaker_from_filename(audio_file.name)
+                character_name = self.get_character_name(discord_username)
+                
+                print(f"Transcribing {audio_file.name} - Speaker: {character_name} ({i+1}/{len(audio_files)})")
                 try:
                     # Load audio using the best available method
                     audio_data, sampling_rate = self.load_audio_file(audio_file)
@@ -329,7 +391,8 @@ class AudioProcessor:
                                 "text": chunk["text"],
                                 "start": chunk["timestamp"][0],
                                 "end": chunk["timestamp"][1],
-                                "no_speech_prob": 0.1  # Default value as HF doesn't provide this
+                                "no_speech_prob": 0.1,  # Default value as HF doesn't provide this
+                                "speaker": character_name  # Add speaker information
                             }
                             segments.append(segment)
                     else:
@@ -340,7 +403,8 @@ class AudioProcessor:
                             "text": result["text"],
                             "start": 0.0,
                             "end": float(audio_duration),
-                            "no_speech_prob": 0.1
+                            "no_speech_prob": 0.1,
+                            "speaker": character_name  # Add speaker information
                         }
                         segments.append(segment)
                     
@@ -350,9 +414,18 @@ class AudioProcessor:
                         
                     print(f"\nTranscription of '{audio_file.name}' saved to '{json_output_path}'.")
                     print(f"Segments: {len(segments)}")
+                    
+                    # Give the GPU a small break between files
+                    if torch.cuda.is_available() and i < len(audio_files) - 1:
+                        print("Giving GPU a brief rest...")
+                        torch.cuda.empty_cache()
+                        time.sleep(1)  # Brief pause between files
+                        
                 except Exception as e:
                     print(f"Error transcribing '{audio_file.name}': {e}")
                     print(f"Traceback: {traceback.format_exc()}")
+                    
+            print(f"Completed transcription of all {len(audio_files)} audio files.")
                     
         except Exception as e:
             print(f"Error loading Whisper model: {e}")
