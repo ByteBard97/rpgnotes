@@ -6,6 +6,7 @@ This module provides the graphical user interface for the application using PyQt
 
 import sys
 import json
+import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (
@@ -13,9 +14,10 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QPushButton, QLabel, QFileDialog,
     QTreeView, QFormLayout, QLineEdit, QComboBox,
     QStatusBar, QToolBar, QStyle, QFrame, QCheckBox,
-    QProgressBar, QGroupBox, QPushButton, QMessageBox
+    QProgressBar, QGroupBox, QPushButton, QMessageBox,
+    QTextEdit
 )
-from PyQt6.QtCore import Qt, QSettings, QSize, QTimer
+from PyQt6.QtCore import Qt, QSettings, QSize, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QFileSystemModel, QAction, QIcon
 from dotenv import load_dotenv, set_key
 
@@ -23,8 +25,88 @@ from config import (
     CONFIG,  # Main configuration dictionary
     OUTPUT_DIR, TEMP_DIR, CHAT_LOG_SOURCE_DIR,
     AUDIO_SOURCE_DIR, CONTEXT_DIR, GEMINI_API_KEY,
-    GEMINI_MODEL_NAME, DELETE_TEMP_FILES, AUDIO_QUALITY
+    GEMINI_MODEL_NAME, DELETE_TEMP_FILES, AUDIO_QUALITY,
+    CHAT_LOG_OUTPUT_DIR, TRANSCRIPTIONS_OUTPUT_DIR,
+    AUDIO_OUTPUT_DIR, TEMP_TRANSCRIPTIONS, DISCORD_MAPPING_FILE,
+    WHISPER_PROMPT_FILE, SUMMARY_PROMPT_FILE, DETAILS_PROMPT_FILE,
+    TEMPLATE_FILE
 )
+from audio import AudioProcessor
+from chat import ChatLogProcessor
+from transcription import TranscriptionProcessor
+from summary import SessionNotesGenerator
+from utils import get_newest_file, load_context_files, get_previous_summary_file
+
+# Define a worker thread for processing
+class ProcessingWorker(QThread):
+    """Worker thread for background processing."""
+    progress_updated = pyqtSignal(int, str)
+    processing_complete = pyqtSignal(bool, str)
+    
+    def __init__(self, source_type, parent=None):
+        super().__init__(parent)
+        self.source_type = source_type
+        self.is_running = True
+        self.session_number = None
+        self.audio_processor = AudioProcessor()
+        self.chat_processor = ChatLogProcessor()
+        self.transcription_processor = TranscriptionProcessor()
+        self.session_notes_generator = SessionNotesGenerator()
+        
+    def run(self):
+        """Run the processing workflow."""
+        try:
+            # 1. Process chat log
+            self.progress_updated.emit(10, "Processing chat log...")
+            self.session_number = self.chat_processor.process_chat_log()
+            if not self.session_number:
+                self.processing_complete.emit(False, "Failed to extract session number from chat log.")
+                return
+                
+            # 2. Extract audio files
+            self.progress_updated.emit(20, "Extracting audio files...")
+            self.audio_processor.unzip_audio()
+            
+            # 3. Transcribe audio
+            self.progress_updated.emit(30, "Transcribing audio (this may take a while)...")
+            self.audio_processor.transcribe_audio()
+            
+            # 4. Combine transcriptions
+            self.progress_updated.emit(70, "Combining transcriptions...")
+            transcript_file = self.transcription_processor.combine_transcriptions(self.session_number)
+            if not transcript_file:
+                self.processing_complete.emit(False, "Failed to combine transcriptions.")
+                return
+                
+            # 5. Generate session notes
+            self.progress_updated.emit(80, "Generating session summary...")
+            session_summary, session_data = self.session_notes_generator.generate_session_notes(
+                transcript_file, self.session_number
+            )
+            
+            # 6. Save summary file
+            self.progress_updated.emit(90, "Saving session notes...")
+            output_file = self.session_notes_generator.save_summary_file(
+                session_summary, session_data, self.session_number
+            )
+            
+            # 7. Cleanup if configured
+            if DELETE_TEMP_FILES:
+                self.progress_updated.emit(95, "Cleaning up temporary files...")
+                try:
+                    shutil.rmtree(TEMP_DIR)
+                except Exception as e:
+                    print(f"Error removing temporary directory: {e}")
+            
+            self.progress_updated.emit(100, "Processing complete!")
+            self.processing_complete.emit(True, f"Session notes saved to: {output_file}")
+            
+        except Exception as e:
+            self.processing_complete.emit(False, f"Error during processing: {str(e)}")
+            
+    def stop(self):
+        """Stop the processing."""
+        self.is_running = False
 
 class ProgressWidget(QGroupBox):
     """Widget for showing detailed progress information."""
@@ -154,6 +236,9 @@ class FileDropFrame(QFrame):
         self.label.setStyleSheet("color: #666;")
         layout.addWidget(self.label)
         
+        # Store reference to main window
+        self.main_window = parent
+        
     def dragEnterEvent(self, event):
         """Handle drag enter events."""
         if event.mimeData().hasUrls():
@@ -193,9 +278,64 @@ class FileDropFrame(QFrame):
                 background-color: #e9ecef;
             }
         """)
+        
+        if not self.main_window:
+            return
+            
+        audio_files = []
+        chat_files = []
+        
         for url in event.mimeData().urls():
-            # TODO: Process dropped files
-            print(f"File dropped: {url.toLocalFile()}")
+            file_path = url.toLocalFile()
+            self.main_window.log(f"File dropped: {file_path}")
+            
+            # Determine file type and add to appropriate list
+            if file_path.lower().endswith((".zip", ".flac", ".wav", ".mp3")):
+                audio_files.append(file_path)
+            elif file_path.lower().endswith(".json"):
+                chat_files.append(file_path)
+            else:
+                self.main_window.log(f"Unsupported file type: {file_path}", error=True)
+        
+        # Process files based on type
+        self.process_dropped_files(audio_files, chat_files)
+        
+    def process_dropped_files(self, audio_files, chat_files):
+        """Process the dropped files."""
+        if not self.main_window:
+            return
+            
+        # Copy chat files to chat log source directory
+        if chat_files:
+            try:
+                for chat_file in chat_files:
+                    dest_path = CHAT_LOG_SOURCE_DIR / Path(chat_file).name
+                    shutil.copy2(chat_file, dest_path)
+                    self.main_window.log(f"Copied chat log to: {dest_path}")
+            except Exception as e:
+                self.main_window.log(f"Error copying chat files: {str(e)}", error=True)
+        
+        # Copy audio files to audio source directory
+        if audio_files:
+            try:
+                for audio_file in audio_files:
+                    dest_path = AUDIO_SOURCE_DIR / Path(audio_file).name
+                    shutil.copy2(audio_file, dest_path)
+                    self.main_window.log(f"Copied audio file to: {dest_path}")
+            except Exception as e:
+                self.main_window.log(f"Error copying audio files: {str(e)}", error=True)
+        
+        # Ask if user wants to process files
+        if (audio_files or chat_files) and self.main_window:
+            response = QMessageBox.question(
+                self.main_window,
+                "Process Files",
+                "Files have been copied to source directories. Process them now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if response == QMessageBox.StandardButton.Yes:
+                self.main_window.process_files()
 
 class MainWindow(QMainWindow):
     """Main window of the RPG Notes Automator application."""
@@ -206,6 +346,8 @@ class MainWindow(QMainWindow):
         self.env_file = Path(".env")
         self.config_file = Path("config.json")
         self.init_ui()
+        self.validate_directories()
+        self.worker = None
         
     def init_ui(self):
         """Initialize the user interface."""
@@ -234,6 +376,7 @@ class MainWindow(QMainWindow):
         source_label = QLabel("Audio Source:")
         self.source_combo = QComboBox()
         self.source_combo.addItems(["Craig Bot", "Discord"])
+        self.source_combo.currentTextChanged.connect(self.handle_source_change)
         source_layout.addWidget(source_label)
         source_layout.addWidget(self.source_combo)
         source_layout.addStretch()
@@ -244,13 +387,35 @@ class MainWindow(QMainWindow):
         self.drop_zone.setMinimumHeight(100)
         left_layout.addWidget(self.drop_zone)
         
+        # Log display
+        self.log_display = QTextEdit()
+        self.log_display.setReadOnly(True)
+        self.log_display.setMinimumHeight(200)
+        left_layout.addWidget(QLabel("Processing Log:"))
+        left_layout.addWidget(self.log_display)
+        
         # File List
         self.file_list = QTreeView()
+        self.file_model = QFileSystemModel()
+        self.file_model.setRootPath(str(OUTPUT_DIR))
+        self.file_model.setNameFilters(["*.txt", "*.md", "*.mp3", "*.wav", "*.json"])
+        self.file_model.setNameFilterDisables(False)
+        self.file_list.setModel(self.file_model)
+        self.file_list.setRootIndex(self.file_model.index(str(OUTPUT_DIR)))
+        self.file_list.setColumnWidth(0, 250)  # Name column
+        self.file_list.setColumnWidth(1, 100)  # Size column
+        self.file_list.clicked.connect(self.handle_file_selection)
+        left_layout.addWidget(QLabel("Generated Files:"))
         left_layout.addWidget(self.file_list)
+        
+        # Progress widget
+        self.progress_widget = ProgressWidget(self)
+        left_layout.addWidget(self.progress_widget)
         
         # Batch Controls
         batch_layout = QHBoxLayout()
         self.process_all_btn = QPushButton("Process All")
+        self.process_all_btn.clicked.connect(self.process_files)
         self.skip_btn = QPushButton("Skip Selected")
         batch_layout.addWidget(self.process_all_btn)
         batch_layout.addWidget(self.skip_btn)
@@ -276,6 +441,37 @@ class MainWindow(QMainWindow):
         main_layout.setStretch(0, 2)  # Left panel takes 2/3
         main_layout.setStretch(1, 1)  # Right panel takes 1/3
         
+    def validate_directories(self):
+        """Validate and create required directories."""
+        directories = [
+            OUTPUT_DIR, TEMP_DIR, CHAT_LOG_OUTPUT_DIR, AUDIO_OUTPUT_DIR, 
+            TRANSCRIPTIONS_OUTPUT_DIR, TEMP_TRANSCRIPTIONS, CONTEXT_DIR
+        ]
+        
+        for directory in directories:
+            if not directory.exists():
+                try:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    self.log(f"Created directory: {directory}")
+                except Exception as e:
+                    self.log(f"Error creating directory {directory}: {e}", error=True)
+                    QMessageBox.warning(
+                        self, 
+                        "Directory Error", 
+                        f"Failed to create directory: {directory}\nError: {str(e)}"
+                    )
+    
+    def log(self, message, error=False):
+        """Add a message to the log display."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        prefix = "[ERROR]" if error else "[INFO]"
+        formatted_message = f"{timestamp} {prefix} {message}"
+        self.log_display.append(formatted_message)
+        if error:
+            print(f"ERROR: {message}")
+        else:
+            print(f"INFO: {message}")
+    
     def create_toolbar(self):
         """Create the main toolbar."""
         toolbar = QToolBar()
@@ -420,29 +616,115 @@ class MainWindow(QMainWindow):
         if directory:
             line_edit.setText(directory)
             self.save_config_value("directories", config_key, directory)
+            # Update directory path in config module
+            if config_key == "output":
+                global OUTPUT_DIR
+                OUTPUT_DIR = Path(directory)
+            elif config_key == "temp":
+                global TEMP_DIR
+                TEMP_DIR = Path(directory)
+            elif config_key == "chat_log_source":
+                global CHAT_LOG_SOURCE_DIR
+                CHAT_LOG_SOURCE_DIR = Path(directory)
+            elif config_key == "audio_source":
+                global AUDIO_SOURCE_DIR
+                AUDIO_SOURCE_DIR = Path(directory)
+            elif config_key == "context":
+                global CONTEXT_DIR
+                CONTEXT_DIR = Path(directory)
+            
+            # Update dependent directories
+            self.validate_directories()
+            self.log(f"Updated {config_key} directory to: {directory}")
             
     def process_files(self):
         """Process the selected files."""
-        # Simulate processing for testing
-        self.progress_widget.start_processing(100)  # Example: 100 files total
+        # Validate prerequisites
+        if not GEMINI_API_KEY:
+            QMessageBox.warning(
+                self, 
+                "Missing API Key", 
+                "Please enter and save your Gemini API key before processing."
+            )
+            return
+            
+        # Check for source files
+        source_type = self.source_combo.currentText()
+        if source_type == "Craig Bot":
+            if not get_newest_file(AUDIO_SOURCE_DIR, "craig-*.flac.zip"):
+                QMessageBox.warning(
+                    self, 
+                    "Missing Audio Files", 
+                    "No Craig bot recordings found in the audio source directory."
+                )
+                return
+        else:  # Discord
+            # Add Discord-specific validation here
+            pass
+            
+        if not get_newest_file(CHAT_LOG_SOURCE_DIR, "*.json"):
+            QMessageBox.warning(
+                self, 
+                "Missing Chat Logs", 
+                "No chat log files found in the chat log source directory."
+            )
+            return
+            
+        # Confirm with user
+        response = QMessageBox.question(
+            self,
+            "Confirm Processing",
+            "This will process the newest audio recordings and chat logs. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
         
-        # Update progress periodically (this would normally be done by the actual processing)
-        self.processed = 0
-        self.process_timer = QTimer()
-        self.process_timer.timeout.connect(self.simulate_progress)
-        self.process_timer.start(1000)  # Update every second
+        if response == QMessageBox.StandardButton.No:
+            return
+            
+        # Start processing
+        self.log("Starting processing workflow...")
+        self.progress_widget.start_processing(100)  # 100% total
         
-    def simulate_progress(self):
-        """Simulate processing progress (for testing)."""
-        self.processed += 1
-        tasks = ["Loading audio file", "Transcribing audio", "Processing chat logs", 
-                "Generating summary", "Creating markdown"]
-        current_task = tasks[min(self.processed // 20, len(tasks) - 1)]
-        self.progress_widget.update_progress(self.processed, current_task)
+        # Create worker thread
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.stop()
+            self.worker.wait()
+            
+        self.worker = ProcessingWorker(source_type)
+        self.worker.progress_updated.connect(self.update_progress)
+        self.worker.processing_complete.connect(self.processing_completed)
+        self.worker.start()
         
-        if self.processed >= 100:
-            self.process_timer.stop()
-            self.progress_widget.finish_processing()
+        # Disable process button while running
+        self.process_all_btn.setEnabled(False)
+        
+    def update_progress(self, progress, message):
+        """Update the progress widget with new information."""
+        self.progress_widget.update_progress(progress, message)
+        self.log(message)
+        
+    def processing_completed(self, success, message):
+        """Handle the completion of processing."""
+        self.process_all_btn.setEnabled(True)
+        self.progress_widget.finish_processing()
+        
+        if success:
+            self.log(message)
+            QMessageBox.information(
+                self,
+                "Processing Complete",
+                message
+            )
+            
+            # Reload file tree
+            self.file_list.setRootIndex(self.file_model.index(str(OUTPUT_DIR)))
+        else:
+            self.log(message, error=True)
+            QMessageBox.critical(
+                self,
+                "Processing Error",
+                message
+            )
 
     def toggle_api_key_visibility(self):
         if self.hide_key_btn.isChecked():
@@ -453,13 +735,13 @@ class MainWindow(QMainWindow):
             self.hide_key_btn.setText("Hide")
 
     def handle_source_change(self):
+        """Handle changes to the audio source selection."""
         source = self.source_combo.currentText()
+        self.log(f"Changed audio source to: {source}")
         if source == "Craig Bot":
-            # Update file patterns and speaker detection logic for Craig
-            pass
+            self.drop_zone.label.setText("Drop Craig bot zip files here")
         else:
-            # Update for Discord
-            pass
+            self.drop_zone.label.setText("Drop Discord audio files here")
 
     def save_api_key(self):
         """Save the API key to the .env file."""
@@ -498,6 +780,42 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
             return
+
+    def handle_file_selection(self, index):
+        """Handle selection of a file in the file tree view."""
+        file_path = self.file_model.filePath(index)
+        self.log(f"Selected file: {file_path}")
+        
+        if file_path.lower().endswith(".md"):
+            try:
+                with open(file_path, "r") as f:
+                    md_content = f.read()
+                self.update_preview(md_content)
+            except Exception as e:
+                self.log(f"Error loading file: {str(e)}", error=True)
+        elif file_path.lower().endswith(".txt"):
+            try:
+                with open(file_path, "r") as f:
+                    text_content = f.read()
+                self.update_preview(f"```\n{text_content}\n```")
+            except Exception as e:
+                self.log(f"Error loading file: {str(e)}", error=True)
+        elif file_path.lower().endswith(".json"):
+            try:
+                with open(file_path, "r") as f:
+                    import json
+                    json_data = json.load(f)
+                    json_content = json.dumps(json_data, indent=2)
+                self.update_preview(f"```json\n{json_content}\n```")
+            except Exception as e:
+                self.log(f"Error loading file: {str(e)}", error=True)
+    
+    def update_preview(self, markdown_content):
+        """Update the preview area with markdown content."""
+        # For now, just show the raw markdown
+        # In a future version, this could render the markdown
+        self.preview_area.setText(markdown_content)
+        self.preview_area.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
 def main():
     """Main entry point for the GUI application."""
