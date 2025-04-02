@@ -1,4 +1,6 @@
-openai-whisper==20240930  # https://github.com/openai/whisper
-google-generativeai==0.8.4  # https://github.com/google-gemini/generative-ai-python
-instructor[google-generativeai]==1.7.2  # https://github.com/instructor-ai/instructor
-python-dotenv==1.0.1  # https://github.com/theskumar/python-dotenv
+pytest==8.3.5
+pydantic==2.5.3
+python-dotenv==1.0.1
+tqdm==4.66.2
+google-generativeai==0.3.2
+instructor==0.6.1

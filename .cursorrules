@@ -1,0 +1,87 @@
+# Cursor Rules
+- python 3.10+
+- be sure to use a python venv for this project
+- max file length 300 lines
+- max method length 100 lines
+- after you finish writing a file, write a test for it and then run the test
+- then I want you to check in the file and the test (assuming it passes correctly) before continuing
+- after every change you make to a file, you need to update the corresponding test and then run it
+- once the tests pass, you need to check in the code with a helpful comment
+- before creating a new file, always check to see if a similar version exists that you could leverage
+- 
+
+## Ask Questions First
+- Ask clarifying questions before making assumptions
+- Verify understanding of requirements before implementing
+- Seek context when task details are ambiguous
+- Confirm approach before making significant changes
+- Request additional information when specifications are incomplete
+- Do not start implementing solutions without explicit confirmation
+- Never assume what the user wants - always ask first
+- Wait for clear instructions before creating files or writing code
+
+## YOLO Mode Rules
+- Always check existing files before creating new ones
+- Delete temporary/one-time scripts after they're used
+- Check in code changes with helpful comments
+- Ask before making architectural decisions
+- Prioritize minimal, clean implementation over complex solutions
+- Document code as you implement it
+- Test each component before moving to the next
+- Respect project's existing conventions and patterns
+- Implement error handling from the beginning
+- Provide regular progress updates
+- Clearly warn about potentially dangerous operations
+- Be careful with operations involving user data
+
+## Testing Rules
+- Write tests alongside new functionality, not after
+- Aim for at least 80% test coverage for critical components
+- Test both the happy path and error cases
+- Use descriptive test names that explain the scenario and expected outcome
+- Keep tests independent of each other
+- Create fixtures and mocks for external dependencies
+- Include integration tests for component interactions
+- Use parameterized tests for testing multiple similar cases
+- Add performance tests for computationally intensive operations
+- Verify edge cases explicitly (empty inputs, large files, etc.)
+- Test multithreaded/concurrent code with stress tests when applicable
+- Document test coverage gaps and assumptions
+
+## Code Style
+- Use descriptive variable and function names
+- Add comments for complex logic only
+- Follow language-specific conventions
+- Keep functions small and focused
+- Maintain consistent indentation (2 spaces for JS/TS, 4 for Python)
+
+## Documentation
+- Provide minimal explanations unless requested
+- Focus on implementation details, not theory
+- Link to relevant documentation when applicable
+- Explain design decisions upon request
+
+## Response Format
+- Be concise and direct
+- Prioritize code snippets over explanations
+- Use bullet points for multiple suggestions
+- Highlight important information when needed
+
+## Problem Solving
+- Start with simple solutions before complex ones
+- Suggest optimizations only when necessary
+- Consider edge cases in implementations
+- Verify solutions with examples when appropriate
+
+## Project Structure
+- Respect existing file organization
+- Keep related code in the same files/modules
+- Follow existing naming conventions
+- Organize imports consistently
+
+## Troubleshooting
+
+- **Long Processing Times**: For lengthy D&D sessions, consider using a smaller model or reducing the audio quality to speed up processing.
+- **Memory Issues**: If you encounter memory errors, try using the `whisper-small` or `whisper-medium` model instead of `whisper-large-v3`.
+- **Audio Quality Issues**: For better transcription results, ensure your audio has good quality and minimal background noise.
+
