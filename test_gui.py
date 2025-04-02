@@ -4,11 +4,12 @@ Tests for the GUI module.
 
 import pytest
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
-from PyQt6.QtWidgets import QApplication, QToolBar, QLabel, QLineEdit, QPushButton, QMessageBox, QMainWindow, QTreeView, QWidget, QVBoxLayout, QComboBox, QCheckBox, QFileDialog
-from PyQt6.QtCore import Qt, QUrl, QMimeData, QSize
-from gui import MainWindow, FileDropFrame, ProgressWidget
+from PyQt6.QtWidgets import QApplication, QToolBar, QLabel, QLineEdit, QPushButton, QMessageBox, QMainWindow, QTreeView, QWidget, QVBoxLayout, QComboBox, QCheckBox, QFileDialog, QTextEdit
+from PyQt6.QtCore import Qt, QUrl, QMimeData, QSize, QModelIndex
+from gui import MainWindow, FileDropFrame, ProgressWidget, ProcessingWorker
 import os
 
 @pytest.fixture(scope="session")
@@ -247,4 +248,174 @@ def test_batch_controls_exist(window):
     assert window.process_all_btn is not None
     assert window.skip_btn is not None
     assert window.process_all_btn.text() == "Process All"
-    assert window.skip_btn.text() == "Skip Selected" 
+    assert window.skip_btn.text() == "Skip Selected"
+
+@patch("pathlib.Path.exists")
+@patch("pathlib.Path.mkdir")
+def test_validate_directories(mock_mkdir, mock_exists, window, monkeypatch):
+    """Test directory validation and creation."""
+    # Mock directory existence checks
+    mock_exists.return_value = False
+    
+    # Mock the log method to avoid I/O
+    mock_log = MagicMock()
+    monkeypatch.setattr(window, "log", mock_log)
+    
+    # Call the method
+    window.validate_directories()
+    
+    # Check that mkdir was called for each directory
+    assert mock_mkdir.call_count > 0
+    assert mock_log.call_count > 0
+
+def test_log_method(window):
+    """Test the log method for adding messages to the log display."""
+    # Add a test message
+    test_message = "Test log message"
+    window.log(test_message)
+    
+    # Check that the message was added to the log display
+    assert test_message in window.log_display.toPlainText()
+    
+    # Test error message
+    error_message = "Test error message"
+    window.log(error_message, error=True)
+    
+    # Check that the error message was added with [ERROR] prefix
+    assert "[ERROR]" in window.log_display.toPlainText()
+    assert error_message in window.log_display.toPlainText()
+
+@patch('gui.get_newest_file')
+def test_process_files_missing_api_key(mock_get_newest, window, monkeypatch, qtbot):
+    """Test handling of missing API key when processing files."""
+    # Mock QMessageBox.warning
+    mock_warning = MagicMock()
+    monkeypatch.setattr(QMessageBox, "warning", mock_warning)
+    
+    # Set API key to empty
+    monkeypatch.setattr('gui.GEMINI_API_KEY', '')
+    
+    # Call the method
+    qtbot.mouseClick(window.process_all_btn, Qt.MouseButton.LeftButton)
+    
+    # Check that warning was shown
+    mock_warning.assert_called_once()
+    assert "API Key" in str(mock_warning.call_args)
+
+@patch('gui.get_newest_file')
+@patch('gui.GEMINI_API_KEY', 'test_key')
+def test_process_files_missing_audio(mock_get_newest, window, monkeypatch, qtbot):
+    """Test handling of missing audio files when processing files."""
+    # Mock QMessageBox.warning
+    mock_warning = MagicMock()
+    monkeypatch.setattr(QMessageBox, "warning", mock_warning)
+    
+    # Set up mock to return None for audio files but something for chat logs
+    mock_get_newest.side_effect = lambda dir, pattern: None if pattern.startswith("craig") else "chat.json"
+    
+    # Call the method
+    qtbot.mouseClick(window.process_all_btn, Qt.MouseButton.LeftButton)
+    
+    # Check that warning was shown
+    mock_warning.assert_called_once()
+    assert "Missing Audio Files" in str(mock_warning.call_args)
+
+@patch('gui.ProcessingWorker')
+@patch('gui.get_newest_file')
+@patch('gui.GEMINI_API_KEY', 'test_key')
+def test_process_files_success(mock_get_newest, mock_worker_class, window, monkeypatch, qtbot):
+    """Test successful processing workflow initiation."""
+    # Mock get_newest_file to return valid files
+    mock_get_newest.return_value = "some_file.ext"
+    
+    # Mock QMessageBox.question to return Yes
+    mock_question = MagicMock(return_value=QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "question", mock_question)
+    
+    # Create mock worker instance
+    mock_worker = MagicMock()
+    mock_worker_class.return_value = mock_worker
+    
+    # Call the method
+    qtbot.mouseClick(window.process_all_btn, Qt.MouseButton.LeftButton)
+    
+    # Check that worker was created and started
+    mock_worker_class.assert_called_once()
+    mock_worker.start.assert_called_once()
+    
+    # Check that process button was disabled
+    assert not window.process_all_btn.isEnabled()
+
+def test_file_drop_frame_accepts_drops(window):
+    """Test that the file drop frame accepts drops."""
+    assert window.drop_zone.acceptDrops()
+
+@patch.object(MainWindow, 'log')
+@patch.object(MainWindow, 'process_files')
+def test_file_drop_processing(mock_process, mock_log, window, monkeypatch, qtbot):
+    """Test processing of dropped files."""
+    # Create a file drop frame with the window as parent
+    drop_frame = FileDropFrame(window)
+    
+    # Mock the shutil.copy2 function
+    mock_copy = MagicMock()
+    monkeypatch.setattr('shutil.copy2', mock_copy)
+    
+    # Mock QMessageBox.question to return Yes
+    mock_question = MagicMock(return_value=QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "question", mock_question)
+    
+    # Create a mock drop event with URLs
+    event = MagicMock()
+    mime_data = MagicMock()
+    event.mimeData.return_value = mime_data
+    
+    # Create mock URLs for audio and chat files
+    urls = [MagicMock(), MagicMock()]
+    urls[0].toLocalFile.return_value = "/path/to/audio.flac"
+    urls[1].toLocalFile.return_value = "/path/to/chat.json"
+    mime_data.hasUrls.return_value = True
+    mime_data.urls.return_value = urls
+    
+    # Trigger the drop event
+    drop_frame.dropEvent(event)
+    
+    # Check that copy was called twice (once for each file)
+    assert mock_copy.call_count == 2
+    
+    # Check that process_files was called
+    mock_process.assert_called_once()
+    
+    # Check that log was called for each file
+    assert mock_log.call_count >= 2
+
+@patch.object(MainWindow, 'update_preview')
+@patch.object(MainWindow, 'log')
+def test_handle_file_selection(mock_log, mock_update_preview, window, monkeypatch, tmpdir):
+    """Test handling of file selection."""
+    # Create a temporary markdown file
+    md_file = tmpdir.join("test.md")
+    md_file.write("# Test Markdown\n\nThis is a test.")
+    
+    # Create a mock model index
+    index = MagicMock()
+    
+    # Mock the file_model.filePath method
+    window.file_model.filePath = MagicMock(return_value=str(md_file))
+    
+    # Call the method
+    window.handle_file_selection(index)
+    
+    # Check that log was called
+    mock_log.assert_called_once()
+    
+    # Check that update_preview was called with the correct content
+    mock_update_preview.assert_called_once()
+    assert "# Test Markdown" in mock_update_preview.call_args[0][0]
+
+def test_update_preview(window):
+    """Test updating the preview area."""
+    test_markdown = "# Test Markdown\n\nThis is a test."
+    window.update_preview(test_markdown)
+    assert window.preview_area.text() == test_markdown
+    assert window.preview_area.alignment() == (Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft) 

@@ -9,11 +9,17 @@ import sys
 import time
 import json
 import zipfile
+import torch
 from pathlib import Path
 from typing import List, Optional
 
-import whisper
+import torch
 from tqdm import tqdm
+from transformers import (
+    AutoModelForSpeechSeq2Seq, 
+    AutoProcessor, 
+    pipeline
+)
 
 from config import (
     AUDIO_SOURCE_DIR, 
@@ -79,7 +85,7 @@ class AudioProcessor:
     Handles audio file extraction and transcription.
     
     This class is responsible for extracting audio files from zip archives
-    and transcribing them using Whisper.
+    and transcribing them using Whisper from Hugging Face Transformers.
     """
     
     def __init__(
@@ -87,7 +93,8 @@ class AudioProcessor:
         source_dir: Path = AUDIO_SOURCE_DIR,
         output_dir: Path = AUDIO_OUTPUT_DIR,
         transcriptions_dir: Path = TEMP_TRANSCRIPTIONS,
-        prompt_file: Path = WHISPER_PROMPT_FILE
+        prompt_file: Path = WHISPER_PROMPT_FILE,
+        model_id: str = "openai/whisper-large-v3"
     ):
         """
         Initialize the AudioProcessor.
@@ -97,11 +104,13 @@ class AudioProcessor:
             output_dir: Directory for extracted audio files
             transcriptions_dir: Directory for transcription output
             prompt_file: File containing the initial prompt for Whisper
+            model_id: Hugging Face model ID for Whisper
         """
         self.source_dir = source_dir
         self.output_dir = output_dir
         self.transcriptions_dir = transcriptions_dir
         self.prompt_file = prompt_file
+        self.model_id = model_id
         
         # Create directories if they don't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -142,11 +151,11 @@ class AudioProcessor:
     
     def transcribe_audio(self) -> None:
         """
-        Transcribe FLAC audio files using Whisper.
+        Transcribe FLAC audio files using Whisper from Hugging Face Transformers.
         """
-        model_name = "large"
-        device = "cuda"
-
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        
         should_transcribe = False
         audio_files = sorted(self.output_dir.glob("*.flac"), key=os.path.getsize)
         for audio_file in audio_files:
@@ -159,35 +168,84 @@ class AudioProcessor:
             print(f"All audio files already transcribed. Skipping.")
             return
 
-        # Inject custom progress bar into Whisper
-        transcribe_module = sys.modules['whisper.transcribe']
-        transcribe_module.tqdm.tqdm = CustomProgressBar
-
+        print(f"Loading Whisper model {self.model_id} on {device}...")
+        
         try:
-            model = whisper.load_model(model_name, device=device, download_root="./models/")
-        except RuntimeError as e:
+            # Load the model and processor
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                self.model_id, 
+                torch_dtype=torch_dtype, 
+                low_cpu_mem_usage=True,
+                use_safetensors=True
+            )
+            model.to(device)
+            
+            processor = AutoProcessor.from_pretrained(self.model_id)
+            
+            # Create the pipeline
+            pipe = pipeline(
+                "automatic-speech-recognition",
+                model=model,
+                tokenizer=processor.tokenizer,
+                feature_extractor=processor.feature_extractor,
+                torch_dtype=torch_dtype,
+                device=device,
+            )
+            
+            # Load the initial prompt
+            with open(self.prompt_file, "r") as f:
+                initial_prompt = f.read().strip()
+                
+            # Configure generation parameters to include timestamps
+            generate_kwargs = {
+                "language": "english",  # Can be changed to match your language
+                "task": "transcribe",
+                "initial_prompt": initial_prompt,
+                "return_timestamps": True
+            }
+            
+            # Process each audio file
+            for audio_file in audio_files:
+                json_output_path = self.transcriptions_dir / f"{audio_file.stem}.json"
+                if json_output_path.exists():
+                    print(f"Skipping '{audio_file.name}' (already transcribed).")
+                    continue
+                
+                print(f"Transcribing {audio_file.name}...")
+                try:
+                    # Transcribe with timestamps
+                    result = pipe(
+                        str(audio_file),
+                        chunk_length_s=30,  # Process 30 seconds at a time
+                        stride_length_s=[5, 5],  # Overlap between chunks
+                        batch_size=8,  # Adjust based on GPU memory
+                        generate_kwargs=generate_kwargs,
+                        return_timestamps=True
+                    )
+                    
+                    # Convert the HF format to match the expected OpenAI Whisper format
+                    # This ensures compatibility with the rest of the pipeline
+                    segments = []
+                    
+                    # Process the chunks which contain timestamp info
+                    for i, chunk in enumerate(result["chunks"]):
+                        segment = {
+                            "id": i,
+                            "text": chunk["text"],
+                            "start": chunk["timestamp"][0],
+                            "end": chunk["timestamp"][1],
+                            "no_speech_prob": 0.1  # Default value as HF doesn't provide this
+                        }
+                        segments.append(segment)
+                    
+                    # Save the segments in the same format as original Whisper
+                    with open(json_output_path, "w") as f:
+                        json.dump(segments, f, indent=2)
+                        
+                    print(f"\nTranscription of '{audio_file.name}' saved to '{json_output_path}'.")
+                except Exception as e:
+                    print(f"Error transcribing '{audio_file.name}': {e}")
+                    
+        except Exception as e:
             print(f"Error loading Whisper model: {e}")
-            print("Ensure you have a compatible CUDA version or use device='cpu'.")
-            return
-
-        with open(self.prompt_file, "r") as f:
-            initial_prompt = f.read().strip()
-
-        for audio_file in audio_files:
-            json_output_path = self.transcriptions_dir / f"{audio_file.stem}.json"
-            if json_output_path.exists():
-                print(f"Skipping '{audio_file.name}' (already transcribed).")
-                continue
-
-            print(f"Transcribing {audio_file.name}...")
-            try:
-                result = model.transcribe(
-                    str(audio_file),
-                    language="en",  # Changed from "pl" to "en"
-                    initial_prompt=initial_prompt
-                )
-                with open(json_output_path, "w") as f:
-                    json.dump(result["segments"], f, indent=2)
-                print(f"\nTranscription of '{audio_file.name}' saved to '{json_output_path}'.")
-            except Exception as e:
-                print(f"Error transcribing '{audio_file.name}': {e}") 
+            print("If using CUDA, ensure you have a compatible version or use device='cpu'.") 
