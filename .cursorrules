@@ -8,7 +8,8 @@
 - after every change you make to a file, you need to update the corresponding test and then run it
 - once the tests pass, you need to check in the code with a helpful comment
 - before creating a new file, always check to see if a similar version exists that you could leverage
-- 
+- when modifying a file, make the minimum number of changes required needed to implement the functionality
+- cleanup dead code and unused scripts
 
 ## Ask Questions First
 - Ask clarifying questions before making assumptions

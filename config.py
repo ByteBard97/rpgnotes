@@ -1,32 +1,83 @@
 """
 Configuration module for RPG Notes Automator.
 
-This module handles loading and managing configuration settings from environment variables.
+This module handles loading and managing configuration settings from both
+environment variables (.env) and configuration file (config.json).
 """
 
 import os
+import json
 from pathlib import Path
+from typing import Dict, Any
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables (sensitive data)
 load_dotenv()
 
-# --- Configuration (from .env) ---
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./output"))
-TEMP_DIR = Path(os.getenv("TEMP_DIR", "./temp"))
-CHAT_LOG_SOURCE_DIR = Path(os.getenv("CHAT_LOG_SOURCE_DIR", "./source/chatlogs"))
-AUDIO_SOURCE_DIR = Path(os.getenv("AUDIO_SOURCE_DIR", "./source/audio"))
-DISCORD_MAPPING_FILE = Path(os.getenv("DISCORD_MAPPING_FILE", "./discord_speaker_mapping.json"))
-WHISPER_PROMPT_FILE = Path(os.getenv("WHISPER_PROMPT_FILE", "./prompts/whisper_prompt.txt"))
-SUMMARY_PROMPT_FILE = Path(os.getenv("SUMMARY_PROMPT_FILE", "./prompts/summary_prompt.txt"))
-DETAILS_PROMPT_FILE = Path(os.getenv("DETAILS_PROMPT_FILE", "./prompts/details_prompt.txt"))
-TEMPLATE_FILE = Path(os.getenv("TEMPLATE_FILE", "./template.md"))
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-DELETE_TEMP_FILES = os.getenv("DELETE_TEMP_FILES", "False").lower() == "true"
-CONTEXT_DIR = Path(os.getenv("CONTEXT_DIR", "./context"))
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
+def load_config() -> Dict[str, Any]:
+    """Load configuration from config.json file."""
+    config_file = Path("config.json")
+    if not config_file.exists():
+        raise FileNotFoundError(
+            "config.json not found. Please create it using the template in the documentation."
+        )
+    
+    with open(config_file, "r") as f:
+        return json.load(f)
 
-# --- Setup Directories ---
+# Load configuration
+try:
+    CONFIG = load_config()
+except Exception as e:
+    print(f"Error loading config.json: {e}")
+    print("Using default configuration...")
+    CONFIG = {
+        "directories": {
+            "output": "./output",
+            "temp": "./temp",
+            "chat_log_source": "./source/chatlogs",
+            "audio_source": "./source/audio",
+            "context": "./context"
+        },
+        "files": {
+            "discord_mapping": "./discord_speaker_mapping.json",
+            "whisper_prompt": "./prompts/whisper_prompt.txt",
+            "summary_prompt": "./prompts/summary_prompt.txt",
+            "details_prompt": "./prompts/details_prompt.txt",
+            "template": "./template.md"
+        },
+        "models": {
+            "gemini": "gemini-1.5-pro"
+        },
+        "settings": {
+            "delete_temp_files": True,
+            "audio_quality": "High"
+        }
+    }
+
+# Directory paths
+OUTPUT_DIR = Path(CONFIG["directories"]["output"])
+TEMP_DIR = Path(CONFIG["directories"]["temp"])
+CHAT_LOG_SOURCE_DIR = Path(CONFIG["directories"]["chat_log_source"])
+AUDIO_SOURCE_DIR = Path(CONFIG["directories"]["audio_source"])
+CONTEXT_DIR = Path(CONFIG["directories"]["context"])
+
+# File paths
+DISCORD_MAPPING_FILE = Path(CONFIG["files"]["discord_mapping"])
+WHISPER_PROMPT_FILE = Path(CONFIG["files"]["whisper_prompt"])
+SUMMARY_PROMPT_FILE = Path(CONFIG["files"]["summary_prompt"])
+DETAILS_PROMPT_FILE = Path(CONFIG["files"]["details_prompt"])
+TEMPLATE_FILE = Path(CONFIG["files"]["template"])
+
+# API keys and models (from .env)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL_NAME = CONFIG["models"]["gemini"]
+
+# Settings
+DELETE_TEMP_FILES = CONFIG["settings"]["delete_temp_files"]
+AUDIO_QUALITY = CONFIG["settings"]["audio_quality"]
+
+# Derived paths
 CHAT_LOG_OUTPUT_DIR = OUTPUT_DIR / "_chat_log"
 TRANSCRIPTIONS_OUTPUT_DIR = OUTPUT_DIR / "_transcripts"
 AUDIO_OUTPUT_DIR = TEMP_DIR / "audio"

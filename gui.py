@@ -5,6 +5,7 @@ This module provides the graphical user interface for the application using PyQt
 """
 
 import sys
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (
@@ -12,14 +13,17 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QPushButton, QLabel, QFileDialog,
     QTreeView, QFormLayout, QLineEdit, QComboBox,
     QStatusBar, QToolBar, QStyle, QFrame, QCheckBox,
-    QProgressBar, QGroupBox, QPushButton
+    QProgressBar, QGroupBox, QPushButton, QMessageBox
 )
 from PyQt6.QtCore import Qt, QSettings, QSize, QTimer
 from PyQt6.QtGui import QFileSystemModel, QAction, QIcon
+from dotenv import load_dotenv, set_key
 
 from config import (
-    OUTPUT_DIR, TEMP_DIR, CHAT_LOG_SOURCE_DIR, 
-    AUDIO_SOURCE_DIR, CONTEXT_DIR
+    CONFIG,  # Main configuration dictionary
+    OUTPUT_DIR, TEMP_DIR, CHAT_LOG_SOURCE_DIR,
+    AUDIO_SOURCE_DIR, CONTEXT_DIR, GEMINI_API_KEY,
+    GEMINI_MODEL_NAME, DELETE_TEMP_FILES, AUDIO_QUALITY
 )
 
 class ProgressWidget(QGroupBox):
@@ -126,8 +130,8 @@ class ProgressWidget(QGroupBox):
 class FileDropFrame(QFrame):
     """A custom frame that accepts file drops."""
     
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.setAcceptDrops(True)
         self.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Sunken)
         self.setMinimumHeight(80)  # Reduced height
@@ -199,6 +203,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = QSettings("RPGNotes", "Automator")
+        self.env_file = Path(".env")
+        self.config_file = Path("config.json")
         self.init_ui()
         
     def init_ui(self):
@@ -223,13 +229,32 @@ class MainWindow(QMainWindow):
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         
-        # Add file management section
-        file_section = self.create_file_section()
-        left_layout.addWidget(file_section)
+        # Source Selection
+        source_layout = QHBoxLayout()
+        source_label = QLabel("Audio Source:")
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(["Craig Bot", "Discord"])
+        source_layout.addWidget(source_label)
+        source_layout.addWidget(self.source_combo)
+        source_layout.addStretch()
+        left_layout.addLayout(source_layout)
         
-        # Add progress section
-        self.progress_widget = ProgressWidget()
-        left_layout.addWidget(self.progress_widget)
+        # Drop Zone
+        self.drop_zone = FileDropFrame(self)
+        self.drop_zone.setMinimumHeight(100)
+        left_layout.addWidget(self.drop_zone)
+        
+        # File List
+        self.file_list = QTreeView()
+        left_layout.addWidget(self.file_list)
+        
+        # Batch Controls
+        batch_layout = QHBoxLayout()
+        self.process_all_btn = QPushButton("Process All")
+        self.skip_btn = QPushButton("Skip Selected")
+        batch_layout.addWidget(self.process_all_btn)
+        batch_layout.addWidget(self.skip_btn)
+        left_layout.addLayout(batch_layout)
         
         main_layout.addWidget(left_panel)
         
@@ -310,7 +335,7 @@ class MainWindow(QMainWindow):
         self.output_dir.setReadOnly(True)
         output_browse = QPushButton("Browse...")
         output_browse.setFixedWidth(100)  # Fixed width for consistency
-        output_browse.clicked.connect(lambda: self.browse_directory(self.output_dir))
+        output_browse.clicked.connect(lambda: self.browse_directory(self.output_dir, "output"))
         output_layout.addWidget(self.output_dir)
         output_layout.addWidget(output_browse)
         layout.addRow("Output Directory:", output_layout)
@@ -320,38 +345,49 @@ class MainWindow(QMainWindow):
         self.temp_dir.setReadOnly(True)
         temp_browse = QPushButton("Browse...")
         temp_browse.setFixedWidth(100)  # Fixed width for consistency
-        temp_browse.clicked.connect(lambda: self.browse_directory(self.temp_dir))
+        temp_browse.clicked.connect(lambda: self.browse_directory(self.temp_dir, "temp"))
         temp_layout.addWidget(self.temp_dir)
         temp_layout.addWidget(temp_browse)
         layout.addRow("Temp Directory:", temp_layout)
         
-        # Add API key input with show/hide toggle
+        # Add API key input with show/hide toggle and save button
         api_layout = QHBoxLayout()
-        self.api_key = QLineEdit()
-        self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key.setPlaceholderText("Enter your API key")
-        api_show = QPushButton("Show")
-        api_show.setFixedWidth(100)
-        api_show.setCheckable(True)
-        api_show.toggled.connect(lambda checked: self.api_key.setEchoMode(
-            QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
-        ))
-        api_layout.addWidget(self.api_key)
-        api_layout.addWidget(api_show)
+        self.api_key_input = QLineEdit()
+        if GEMINI_API_KEY:  # Load existing key if available
+            self.api_key_input.setText(GEMINI_API_KEY)
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)  # Visible by default
+        self.hide_key_btn = QPushButton("Hide")
+        self.hide_key_btn.setCheckable(True)
+        self.hide_key_btn.clicked.connect(self.toggle_api_key_visibility)
+        self.save_key_btn = QPushButton("Save")
+        self.save_key_btn.clicked.connect(self.save_api_key)
+        api_layout.addWidget(self.api_key_input)
+        api_layout.addWidget(self.hide_key_btn)
+        api_layout.addWidget(self.save_key_btn)
         layout.addRow("API Key:", api_layout)
         
         # Add model selection
         self.model_combo = QComboBox()
         self.model_combo.addItems(["gemini-1.5-pro", "gemini-1.0-pro"])
+        current_model_idx = self.model_combo.findText(GEMINI_MODEL_NAME)
+        if current_model_idx >= 0:
+            self.model_combo.setCurrentIndex(current_model_idx)
+        self.model_combo.currentTextChanged.connect(lambda text: self.save_config_value("models", "gemini", text))
         layout.addRow("Model:", self.model_combo)
         
         # Add audio quality settings
         self.audio_quality = QComboBox()
         self.audio_quality.addItems(["High", "Medium", "Low"])
+        current_quality_idx = self.audio_quality.findText(AUDIO_QUALITY)
+        if current_quality_idx >= 0:
+            self.audio_quality.setCurrentIndex(current_quality_idx)
+        self.audio_quality.currentTextChanged.connect(lambda text: self.save_config_value("settings", "audio_quality", text))
         layout.addRow("Audio Quality:", self.audio_quality)
         
         # Add delete temp files option
         self.delete_temp = QCheckBox("Delete temporary files after processing")
+        self.delete_temp.setChecked(DELETE_TEMP_FILES)
+        self.delete_temp.toggled.connect(lambda checked: self.save_config_value("settings", "delete_temp_files", checked))
         layout.addRow("", self.delete_temp)
         
         return group
@@ -378,11 +414,12 @@ class MainWindow(QMainWindow):
         
         return group
         
-    def browse_directory(self, line_edit):
-        """Open directory browser dialog."""
+    def browse_directory(self, line_edit, config_key):
+        """Open directory browser dialog and save to config."""
         directory = QFileDialog.getExistingDirectory(self, "Select Directory")
         if directory:
             line_edit.setText(directory)
+            self.save_config_value("directories", config_key, directory)
             
     def process_files(self):
         """Process the selected files."""
@@ -406,6 +443,61 @@ class MainWindow(QMainWindow):
         if self.processed >= 100:
             self.process_timer.stop()
             self.progress_widget.finish_processing()
+
+    def toggle_api_key_visibility(self):
+        if self.hide_key_btn.isChecked():
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.hide_key_btn.setText("Show")
+        else:
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.hide_key_btn.setText("Hide")
+
+    def handle_source_change(self):
+        source = self.source_combo.currentText()
+        if source == "Craig Bot":
+            # Update file patterns and speaker detection logic for Craig
+            pass
+        else:
+            # Update for Discord
+            pass
+
+    def save_api_key(self):
+        """Save the API key to the .env file."""
+        api_key = self.api_key_input.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "Warning", "Please enter an API key before saving.")
+            return
+            
+        try:
+            set_key(self.env_file, "GEMINI_API_KEY", api_key)
+            self.statusBar.showMessage("API key saved successfully", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save API key: {str(e)}")
+            return
+
+    def save_config_value(self, section, key, value):
+        """Save a value to config.json."""
+        try:
+            # Load current config
+            if self.config_file.exists():
+                with open(self.config_file, "r") as f:
+                    config = json.load(f)
+            else:
+                config = CONFIG  # Use default config from config.py
+            
+            # Update value
+            if section not in config:
+                config[section] = {}
+            config[section][key] = value
+            
+            # Save config
+            with open(self.config_file, "w") as f:
+                json.dump(config, f, indent=4)
+            
+            self.statusBar.showMessage(f"Configuration saved successfully", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
+            return
 
 def main():
     """Main entry point for the GUI application."""

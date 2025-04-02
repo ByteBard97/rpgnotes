@@ -1,0 +1,23 @@
+{
+    "directories": {
+        "output": "./output",
+        "temp": "./temp",
+        "chat_log_source": "./source/chatlogs",
+        "audio_source": "./source/audio",
+        "context": "./context"
+    },
+    "files": {
+        "discord_mapping": "./discord_speaker_mapping.json",
+        "whisper_prompt": "./prompts/whisper_prompt.txt",
+        "summary_prompt": "./prompts/summary_prompt.txt",
+        "details_prompt": "./prompts/details_prompt.txt",
+        "template": "./template.md"
+    },
+    "models": {
+        "gemini": "gemini-1.5-pro"
+    },
+    "settings": {
+        "delete_temp_files": true,
+        "audio_quality": "High"
+    }
+} 
