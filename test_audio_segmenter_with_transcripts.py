@@ -452,6 +452,7 @@ def visualize_results(audio_data, sample_rate, ground_truth, detected_segments, 
 def compare_transcripts(audio_data, sample_rate, ground_truth, output_dir):
     """
     Transcribe each segment of the audio and compare with ground truth transcripts.
+    Uses batched processing for better GPU utilization.
     
     Args:
         audio_data: The complete audio data
@@ -480,50 +481,63 @@ def compare_transcripts(audio_data, sample_rate, ground_truth, output_dir):
             device=device
         )
         
-        # Transcribe each segment
-        results = []
+        print(f"Device set to use {device}")
+        
+        # Extract all audio segments
+        segment_audios = []
         for i, segment in enumerate(ground_truth):
-            print(f"Transcribing segment {i+1}/{len(ground_truth)}...")
-            
             # Extract the audio segment
             start_sample = int(segment["start"] * sample_rate)
             end_sample = int(segment["end"] * sample_rate)
             segment_audio = audio_data[start_sample:end_sample]
             
-            # Create a temporary file for the segment
-            temp_dir = Path("temp")
-            temp_dir.mkdir(exist_ok=True)
-            temp_file = temp_dir / f"segment_{i}.flac"
-            sf.write(temp_file, segment_audio, sample_rate)
+            segment_audios.append({
+                "segment_id": i,
+                "audio": {"array": segment_audio, "sampling_rate": sample_rate},
+                "transcript": segment["transcript"].strip().upper(),
+                "start_time": segment["start"],
+                "end_time": segment["end"],
+                "duration": segment["duration"]
+            })
+        
+        # Process in batches
+        results = []
+        batch_size = 4  # Adjust based on your GPU memory
+        
+        for i in range(0, len(segment_audios), batch_size):
+            batch = segment_audios[i:i+batch_size]
+            print(f"Transcribing segment {i+1}-{min(i+batch_size, len(segment_audios))}/{len(segment_audios)}...")
             
-            # Transcribe
-            try:
-                result = transcriber({"array": segment_audio, "sampling_rate": sample_rate})
-                computed_text = result["text"].strip().upper()  # Convert to uppercase to match LibriSpeech
-                
+            # Create batch of audio inputs for the pipeline
+            audio_inputs = [segment["audio"] for segment in batch]
+            
+            # Process the entire batch at once
+            batch_results = transcriber(
+                audio_inputs,
+                batch_size=batch_size,
+                return_timestamps=False,
+                generate_kwargs={"language": "en", "task": "transcribe"}
+            )
+            
+            # Process and compare results from this batch
+            for segment, result in zip(batch, batch_results):
                 # Clean up computed text
+                computed_text = result["text"].strip().upper()
                 computed_text = computed_text.replace(",", "").replace(".", "").replace("?", "").replace("!", "")
                 
-                # Get original transcript and normalize
-                original_text = segment["transcript"].strip().upper()
+                # Clean original text
+                original_text = segment["transcript"]
                 original_text = original_text.replace(",", "").replace(".", "").replace("?", "").replace("!", "")
                 
                 # Store comparison
                 results.append({
-                    "segment_id": i,
-                    "start_time": segment["start"],
-                    "end_time": segment["end"],
+                    "segment_id": segment["segment_id"],
+                    "start_time": segment["start_time"],
+                    "end_time": segment["end_time"],
                     "duration": segment["duration"],
                     "original_text": original_text,
                     "computed_text": computed_text
                 })
-                
-                # Remove temporary file
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-                    
-            except Exception as e:
-                print(f"Error transcribing segment {i}: {e}")
         
         # Calculate metrics
         for result in results:
