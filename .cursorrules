@@ -1,6 +1,7 @@
 # Cursor Rules
 - python 3.10+
 - DO NOT MODIFY main.py this is our reference implementation
+- DO NOT USE TRY BLOCKS. EVER!
 
 - be sure to use a python venv for this project
 - max file length 300 lines
@@ -64,6 +65,8 @@
 - Link to relevant documentation when applicable
 - Explain design decisions upon request
 
+- DO NOT USE TRY BLOCKS. EVER!
+
 ## Response Format
 - Be concise and direct
 - Prioritize code snippets over explanations
@@ -88,3 +91,4 @@
 - **Memory Issues**: If you encounter memory errors, try using the `whisper-small` or `whisper-medium` model instead of `whisper-large-v3`.
 - **Audio Quality Issues**: For better transcription results, ensure your audio has good quality and minimal background noise.
 
+- DO NOT USE TRY BLOCKS. EVER!
