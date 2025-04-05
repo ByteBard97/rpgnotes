@@ -1,9 +1,10 @@
 """
 Process D&D session audio with improved segmentation and batch transcription.
 
-This script processes a specific audio file using:
-1. Audio segmentation to identify speech segments
-2. Batch processing for more efficient transcription
+This script processes D&D session recordings to:
+1. Segment speech from multiple audio files
+2. Transcribe each segment with speaker identification
+3. Assemble a complete transcript suitable for LLM processing
 """
 
 import os
@@ -14,17 +15,24 @@ import torch
 import soundfile as sf
 from pathlib import Path
 from transformers import pipeline, AutoModelForSpeechSeq2Seq, AutoProcessor
-from datasets import Dataset
 import re
 import matplotlib.pyplot as plt
 
 from audio_segmenter import AudioSegmenter
 
 # Configure paths
-TARGET_FILE = "recordings/friday_march_4/2-iusegentoobtw_0o.flac"
-OUTPUT_DIR = Path("recordings/friday_march_4/output")
-TRANSCRIPTION_DIR = Path("recordings/friday_march_4/transcriptions")
+SESSION_DIR = Path("recordings/friday_march_4")
+OUTPUT_DIR = SESSION_DIR / "output"
+TRANSCRIPTION_DIR = SESSION_DIR / "transcriptions"
 TEMP_DIR = Path("temp")
+
+# Player mapping (Discord username to character name)
+PLAYER_MAPPING = {
+    "nakor_the_blue_rider": "Dungeon Master",
+    "iusegentoobtw": "Astreus",
+    "mden2": "Delphi, Aella, and Rheana"
+    # Add more player mappings as needed
+}
 
 # Ensure output directories exist
 OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
@@ -205,14 +213,13 @@ def transcribe_segments_batch(segments, sample_rate, model_id="openai/whisper-la
                     segments_pbar.update(1)
                     continue
                 
-                # Create segment with transcription
+                # Create segment with transcription (without no_speech_prob)
                 transcribed_segment = {
                     "id": segment_id,
                     "text": text,
                     "start": start_time,
                     "end": end_time,
-                    "duration": duration,
-                    "no_speech_prob": 0.1  # Default value
+                    "duration": duration
                 }
                 
                 transcribed_segments.append(transcribed_segment)
@@ -334,9 +341,10 @@ def visualize_segments(audio_data, sample_rate, segments, output_path):
     return output_dir
 
 
-def save_text_transcript(segments, output_path):
-    """Save a human-readable transcript with timestamps"""
-    print(f"Saving human-readable transcript to {output_path}")
+def save_text_transcript(segments, output_path, speaker_name=None):
+    """Save a human-readable transcript with timestamps and optional speaker name"""
+    speaker_prefix = f"{speaker_name}: " if speaker_name else ""
+    print(f"Saving transcript to {output_path}")
     
     with open(output_path, 'w', encoding='utf-8') as f:
         for segment in segments:
@@ -348,15 +356,184 @@ def save_text_transcript(segments, output_path):
             
             timestamp = f"[{start_mm:02d}:{start_ss:02d} - {end_mm:02d}:{end_ss:02d}]"
             
-            # Write the line
-            f.write(f"{timestamp} {segment['text']}\n\n")
+            # Write the line with optional speaker name
+            f.write(f"{timestamp} {speaker_prefix}{segment['text']}\n\n")
 
 
-def main():
-    """Main processing function"""
-    start_time = time.time()
-    print("=== D&D Session Audio Processing ===")
+def extract_player_name(file_name):
+    """Extract player name from filename like '1-nakor_the_blue_rider_0o.flac'"""
+    # Extract part between first dash and last underscore
+    match = re.search(r'^\d+-(.+?)(?:_\do)?\.flac$', file_name)
+    if match:
+        return match.group(1)
+    return None
+
+
+def get_character_name(player_name):
+    """Get character name from player mapping"""
+    return PLAYER_MAPPING.get(player_name, f"Unknown ({player_name})")
+
+
+def process_audio_file(file_path):
+    """Process a single audio file and return segments with player info"""
+    file_path = Path(file_path)
+    player_name = extract_player_name(file_path.name)
+    character_name = get_character_name(player_name)
     
+    print(f"\n=== Processing {file_path.name} ({character_name}) ===")
+    
+    # Segment the audio
+    segments, audio_data, sample_rate = segment_audio(file_path)
+    if not segments:
+        print("No speech segments detected. Skipping.")
+        return None
+    
+    # Visualize segments
+    visualization_path = OUTPUT_DIR / f"{file_path.stem}_segments.png"
+    chunks_dir = visualize_segments(audio_data, sample_rate, segments, visualization_path)
+    
+    # Transcribe segments
+    transcribed_segments = transcribe_segments_batch(segments, sample_rate, batch_size=4)
+    
+    # Add player and character info to segments
+    for segment in transcribed_segments:
+        segment['player'] = player_name
+        segment['character'] = character_name
+    
+    # Save JSON results
+    json_output_path = TRANSCRIPTION_DIR / f"{file_path.stem}.json"
+    with open(json_output_path, "w") as f:
+        json.dump(transcribed_segments, f, indent=2)
+    
+    # Save human-readable transcript
+    text_output_path = TRANSCRIPTION_DIR / f"{file_path.stem}.txt"
+    save_text_transcript(transcribed_segments, text_output_path, character_name)
+    
+    # Calculate audio duration
+    audio_duration = len(audio_data) / sample_rate if audio_data is not None else 0
+    audio_minutes = audio_duration / 60
+    
+    print(f"Processed {len(segments)} segments, transcribed {len(transcribed_segments)}")
+    print(f"Audio duration: {audio_minutes:.2f} minutes")
+    print(f"Results saved to:")
+    print(f"  - {json_output_path}")
+    print(f"  - {text_output_path}")
+    print(f"  - {visualization_path}")
+    print(f"  - {chunks_dir}/ (detailed visualizations)")
+    
+    return transcribed_segments
+
+
+def add_session_context(session_dir, session_number=None, campaign_date=None):
+    """Create a context section with information about the session and campaign"""
+    context = []
+    
+    # Basic session info
+    if session_number:
+        context.append(f"SESJA {session_number}")
+    
+    # Add date (either provided or today's date)
+    if campaign_date:
+        context.append(f"DATA: {campaign_date}")
+    else:
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        context.append(f"DATA: {today}")
+    
+    # Add campaign context
+    context.append("\nKONTEKST KAMPANII:")
+    # This can be loaded from a separate file or entered manually
+    # For now, we'll add a placeholder
+    context.append("Bohaterowie Przepowiedni kontynuują swoją podróż w świecie Thylei, walcząc przeciwko Tytanom.")
+
+    # Check if there's a context file
+    context_file = session_dir / "session_context.txt"
+    if context_file.exists():
+        with open(context_file, "r", encoding="utf-8") as f:
+            context.append("\nDODATKOWY KONTEKST:")
+            context.append(f.read().strip())
+    
+    return "\n".join(context)
+
+
+def assemble_combined_transcript(all_segments, session_dir, session_number=None, campaign_date=None):
+    """Assemble a combined transcript from all players with additional context"""
+    if not all_segments or len(all_segments) == 0:
+        return None
+    
+    # Get session context
+    context = add_session_context(session_dir, session_number, campaign_date)
+    
+    # Flatten the list if it's a list of lists
+    flat_segments = []
+    for segments in all_segments:
+        if segments:
+            flat_segments.extend(segments)
+    
+    # Sort by start time
+    sorted_segments = sorted(flat_segments, key=lambda x: x['start'])
+    
+    # Create combined transcript with context at the beginning
+    combined_text = [context, "\n\nTRANSKRYPCJA SESJI:\n"]
+    
+    for segment in sorted_segments:
+        combined_text.append(f"{segment['character']}: {segment['text']}")
+    
+    return "\n".join(combined_text)
+
+
+def process_session(session_dir):
+    """Process all audio files in a session directory"""
+    session_dir = Path(session_dir)
+    print(f"=== Processing D&D Session in {session_dir} ===")
+    
+    # Find all FLAC files
+    flac_files = list(session_dir.glob("*.flac"))
+    if not flac_files:
+        print("No FLAC files found.")
+        return
+    
+    print(f"Found {len(flac_files)} audio files:")
+    for file in flac_files:
+        size_mb = file.stat().st_size / (1024 * 1024)
+        player_name = extract_player_name(file.name)
+        character_name = get_character_name(player_name)
+        print(f"- {file.name}: {size_mb:.1f} MB ({character_name})")
+    
+    # Process each file
+    start_time = time.time()
+    all_segments = []
+    
+    for file in flac_files:
+        segments = process_audio_file(file)
+        all_segments.append(segments)
+    
+    # Assemble combined transcript
+    combined_transcript = assemble_combined_transcript(all_segments, session_dir)
+    
+    if combined_transcript:
+        # Save combined transcript
+        combined_path = TRANSCRIPTION_DIR / "combined_transcript.txt"
+        with open(combined_path, "w", encoding="utf-8") as f:
+            f.write(combined_transcript)
+        
+        # Save LLM-friendly version (no timestamps)
+        llm_path = TRANSCRIPTION_DIR / "llm_transcript.txt"
+        with open(llm_path, "w", encoding="utf-8") as f:
+            f.write(combined_transcript)
+        
+        print(f"\nCombined transcript saved to:")
+        print(f"  - {combined_path}")
+        print(f"  - {llm_path} (LLM-friendly format)")
+    
+    # Calculate session stats
+    elapsed_time = time.time() - start_time
+    print(f"\n=== Session Processing Complete ===")
+    print(f"Processed {len(flac_files)} audio files")
+    print(f"Processing time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+
+
+if __name__ == "__main__":
     # Check GPU
     if torch.cuda.is_available():
         print(f"Using GPU: {torch.cuda.get_device_name(0)}")
@@ -364,56 +541,4 @@ def main():
     else:
         print("No GPU available, using CPU (this will be slow)")
     
-    target_path = Path(TARGET_FILE)
-    if not target_path.exists():
-        print(f"Error: Target file not found at {target_path}")
-        return
-    
-    # Get audio file details
-    file_size_mb = target_path.stat().st_size / (1024 * 1024)
-    print(f"Processing audio file: {target_path.name} ({file_size_mb:.1f} MB)")
-    
-    # Segment the audio
-    segments, audio_data, sample_rate = segment_audio(target_path)
-    if not segments:
-        print("No speech segments detected. Exiting.")
-        return
-    
-    # Calculate audio duration
-    audio_duration = len(audio_data) / sample_rate
-    audio_minutes = audio_duration / 60
-    print(f"Audio duration: {audio_minutes:.2f} minutes")
-    
-    # Visualize segments
-    visualization_path = OUTPUT_DIR / f"{target_path.stem}_segments.png"
-    chunks_dir = visualize_segments(audio_data, sample_rate, segments, visualization_path)
-    
-    # Transcribe segments in batches
-    transcribed_segments = transcribe_segments_batch(segments, sample_rate, batch_size=4)
-    
-    # Save JSON results
-    json_output_path = TRANSCRIPTION_DIR / f"{target_path.stem}.json"
-    with open(json_output_path, "w") as f:
-        json.dump(transcribed_segments, f, indent=2)
-    
-    # Save human-readable transcript
-    text_output_path = TRANSCRIPTION_DIR / f"{target_path.stem}.txt"
-    save_text_transcript(transcribed_segments, text_output_path)
-    
-    # Calculate stats
-    elapsed_time = time.time() - start_time
-    proc_speed = audio_minutes / (elapsed_time / 60) if audio_minutes > 0 else 0
-    
-    print("\n=== Processing Complete ===")
-    print(f"Processed {len(segments)} segments, transcribed {len(transcribed_segments)}")
-    print(f"Processing time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
-    print(f"Processing speed: {proc_speed:.2f}x realtime")
-    print(f"Results saved to:")
-    print(f"  - {json_output_path}")
-    print(f"  - {text_output_path}")
-    print(f"  - {visualization_path}")
-    print(f"  - {chunks_dir}/ (detailed segment visualizations)")
-
-
-if __name__ == "__main__":
-    main() 
+    process_session(SESSION_DIR) 
