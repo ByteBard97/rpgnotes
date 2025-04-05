@@ -222,16 +222,10 @@ class AudioProcessor:
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         
-        should_transcribe = False
-        audio_files = sorted(self.output_dir.glob("*.flac"), key=os.path.getsize)
-        for audio_file in audio_files:
-            json_output_path = self.transcriptions_dir / f"{audio_file.stem}.json"
-            if json_output_path.exists():
-                continue
-            should_transcribe = True
-
-        if not should_transcribe:
-            print(f"All audio files already transcribed. Skipping.")
+        # Get all audio files sorted by size
+        audio_files = sorted(self.source_dir.glob("*.flac"), key=os.path.getsize)
+        if not audio_files:
+            print("No FLAC files found to transcribe.")
             return
 
         print(f"Loading Whisper model {self.model_id} on {device}...")
@@ -273,13 +267,10 @@ class AudioProcessor:
                     print(f"Using initial prompt from {self.prompt_file}")
                 
             # Process each audio file
-            for audio_file in audio_files:
+            total_files = len(audio_files)
+            for file_index, audio_file in enumerate(audio_files):
                 json_output_path = self.transcriptions_dir / f"{audio_file.stem}.json"
-                if json_output_path.exists():
-                    print(f"Skipping '{audio_file.name}' (already transcribed).")
-                    continue
-                
-                print(f"Transcribing {audio_file.name}...")
+                print(f"\nTranscribing file {file_index+1}/{total_files}: {audio_file.name}...")
                 try:
                     # Load audio using the best available method
                     audio_data, sampling_rate = self.load_audio_file(audio_file)
@@ -316,7 +307,11 @@ class AudioProcessor:
                         })
                         
                     # Run transcription
+                    print(f"Starting transcription at {time.strftime('%H:%M:%S')}...")
+                    start_time = time.time()
                     result = pipe(input_data, **params)
+                    elapsed_time = time.time() - start_time
+                    print(f"Transcription completed in {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
                     
                     # Convert the HF format to match the expected OpenAI Whisper format
                     segments = []
