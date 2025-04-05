@@ -50,7 +50,7 @@ def main():
         source_dir=base_dir,
         output_dir=output_dir,
         transcriptions_dir=transcriptions_dir,
-        model_id="openai/whisper-small"  # Using small model for faster processing
+        model_id="openai/whisper-medium"  # Medium model is more reliable with current library versions
     )
     
     print("\n=== Starting Audio Processing Test ===\n")
@@ -68,6 +68,17 @@ def main():
     print("\nProcessing files...")
     start_time = time.time()
     try:
+        # Show estimated processing time based on file sizes
+        total_size_gb = total_size / 1024  # Convert to GB
+        print(f"Total audio to process: {total_size_gb:.2f} GB")
+        
+        # Rough estimate: large-v3 processes ~1.5 minutes of audio per second on RTX 4070
+        # Assuming ~10MB per minute of audio at 48kHz stereo
+        estimated_minutes = total_size / 10
+        estimated_processing_time = estimated_minutes / 1.5
+        print(f"Estimated processing time: ~{format_time(estimated_processing_time)} (may vary based on GPU and audio content)")
+        print("\n" + "="*50 + "\n")
+        
         # Process the audio files
         processor.transcribe_audio()
         
