@@ -1,0 +1,87 @@
+# This is a customized example for Thylea campaign
+# Copy this file to whisper.txt and modify as needed for your campaign
+
+You are about to receive an audio recording from a Dungeons and Dragons session in English.
+The players use colloquial language with fantasy elements.
+Game rules often include English words.
+The following names of characters, locations and monsters may appear:
+
+Party Characters
+    Astraeus
+    Delphi Silverstar
+    Aella Swiftstrike
+    Rhaena
+
+The Five Gods
+    Kyrah
+    Mytros
+    Pythor
+    Vallus
+    Volkan   
+
+Titans
+    Thylea
+    Kentimane
+    Sydon
+    Lutheria
+    Chalcia
+    Goloron
+    Talieus
+    Yala
+
+Dragons
+    Balmytria
+    Hexia
+    Hezzebal
+    Icarus
+    Argyn
+
+NPCs
+    Kyra
+    Queen Valis
+    Acastus
+    Gaius
+    Jankor
+    Vytha
+    Estor Arkelander
+    Sethis
+    Vaitha
+    Shazam
+    Delphia
+
+Locations
+    Mytros
+    Cerulean Gulf
+    Forgotten Sea
+    Ship Ultros
+    Fire Island
+    Themis Island
+    Isle of Yonder
+    Turtle Island
+    Bloodscale Village
+    Floating Lantern
+    Praxys
+
+Items
+    Axe of Xander
+    Antikythera
+    Shield of Volkan
+    Scepter of King Driptongue
+    Crown of Dragonlords
+    Mithral chakram
+    Shortbow of Cupid
+
+Common phrases
+    initiative roll
+    skill check
+    hit points
+    hp
+    armor class
+    attack
+    damage
+    spell save DC
+    d20 roll
+    bardic inspiration
+    channel divinity
+    ranger abilities
+    divine smite 

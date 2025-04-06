@@ -1,132 +1,73 @@
-Zaraz nastąpi nagranie z sesji Dungeons and Dragons w języku polskim.
-Gracze używają języka potocznego z elementami fantasy.
-Zasady gry często mają używane angielskie słowa.
-Mogą pojawić się następujące imiona, nazwy lokacji i potworów:
+# This file should be customized for your specific campaign and players
+# Replace the placeholder names with your actual player and character names
+# Add any NPCs, locations, monsters, and items specific to your campaign
 
-Gracze
-    Miłosz
-    Maciek
-    Adam
-    Keszu
-    Kentos
-    Bartek
-    Karpik
-    Karpiu
+You are about to receive an audio recording from a Dungeons and Dragons session in English.
+The players use colloquial language with fantasy elements.
+Game rules often include English words.
+The following names of characters, locations and monsters may appear:
 
-Bohaterowie Przepowiedni
-    Felicjan
-    Arevon
-    Versir
-    Orestes
-    Orion
+Players
+    # Add your players' names here
+    Player1
+    Player2
+    Player3
+    Player4
+    Player5
 
-Piątka Bogów
+Party Characters
+    # Add your party's character names here
+    Character1
+    Character2
+    Character3
+    Character4
+
+The Five Gods
     Kyrah
     Mytros
     Pythor
     Vallus
     Volkan   
 
-Tytani
+Titans
     Thylea
     Kentimane
     Sydon
     Lutheria
     Chalcia
     Goloron
-    Hergeron
     Talieus
     Yala
 
-Smoki
-    Balmytria
-    Sybolkorax
-    Tysophale
-    Raspytrion
-    Arkyrania
-    Arystonar
-    Hexia
-    Hezzebal
-    Orichalkos
-    Chaeristis
-    Zarmulax
+Dragons
+    # Add any dragons in your campaign
+    Example: Icarus
 
-Inni
-    Versi
-    Aesop
-    Bullbug
-    Chondrus
-    Darien
-    Nastura
-    Leah
-    Loreus
-    Moxena
-    Nessa
-    Pholon
-    Steros
-    Bront
-    Despina
-    Acastus
-    Estor Arkelander
-    Telamok
-    Anora
-    Brax
-    Corinna
-    Xander Hourath
-    Taran Neurdagono
-    Bella
-    Icarus
-    Ismene
-    Lyra
-    Makhaila
-    Melania
-    Sulla Neurdagon
-    Apasia
-    Alexandros
-    Tarchon
-    Grimmik
-    Zorin
-    Damon
-    Gaius
-    Astria
-    Grecosia
-    Rhea
-    Demetria
-    Delphia
-    Karpathos
-    Helios
-    Smoczy lordowie
+NPCs
+    # Add important NPCs in your campaign
+    Example: Queen Valis
 
-Lokalizacje
-    Mytros
-    Estoria
-    Arezja
-    Statek Ultros
-    Nekropolia Telamok
-    Mithralowa Kuźnia
-    Themis
-    Rosos
-    Wyspa Złotego Serca
-    Wyspa Mojr
-    Wyspa Skorpiona
-    Wyspa Indygo
-    Zguba Tytana
-    Wyspa Ognia
-    Wyspa Yonder
-    Wyspa Forlorn
-    Zatoka Cerulańska
-    Zapomniane Morze
-    Morze Otchłani
-    Praxys
-    Typhon
-    Charybdis
+Locations
+    # Add important locations in your campaign
+    Example: Mytros
+    Example: Cerulean Gulf
+    Example: Ship Ultros
 
-Typowe zwroty
-    rzut na inicjatywę
+Items
+    # Add significant items in your campaign
+    Example: Antikythera
+    Example: Shield of Volkan
+
+Common phrases
+    initiative roll
     skill check
-    punkty życia
-    hpki
-    klasa pancerza
-    atak
-    obrażenia
-    rzut d20
+    hit points
+    hp
+    armor class
+    attack
+    damage
+    spell save DC
+    d20 roll
+    # Add class-specific terms for your party
+    Example: bardic inspiration
+    Example: divine smite 

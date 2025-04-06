@@ -430,39 +430,48 @@ def add_session_context(session_dir, session_number=None, campaign_date=None):
     
     # Basic session info
     if session_number:
-        context.append(f"SESJA {session_number}")
+        context.append(f"SESSION {session_number}")
     
     # Add date (either provided or today's date)
     if campaign_date:
-        context.append(f"DATA: {campaign_date}")
+        context.append(f"DATE: {campaign_date}")
     else:
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
-        context.append(f"DATA: {today}")
+        context.append(f"DATE: {today}")
     
     # Add campaign context
-    context.append("\nKONTEKST KAMPANII:")
+    context.append("\nCAMPAIGN CONTEXT:")
     # This can be loaded from a separate file or entered manually
     # For now, we'll add a placeholder
-    context.append("Bohaterowie Przepowiedni kontynuują swoją podróż w świecie Thylei, walcząc przeciwko Tytanom.")
+    context.append("The heroes of the Prophecy continue their journey in the world of Thylea, fighting against the Titans.")
 
+    # Add character information from file if it exists
+    character_file = session_dir / "characters.txt"
+    if character_file.exists():
+        with open(character_file, "r", encoding="utf-8") as f:
+            context.append("\nCHARACTERS:")
+            context.append(f.read().strip())
+    
     # Check if there's a context file
     context_file = session_dir / "session_context.txt"
     if context_file.exists():
         with open(context_file, "r", encoding="utf-8") as f:
-            context.append("\nDODATKOWY KONTEKST:")
+            context.append("\nADDITIONAL CONTEXT:")
             context.append(f.read().strip())
     
     return "\n".join(context)
 
 
-def assemble_combined_transcript(all_segments, session_dir, session_number=None, campaign_date=None):
-    """Assemble a combined transcript from all players with additional context"""
+def assemble_combined_transcript(all_segments, session_dir=None, session_number=None, campaign_date=None):
+    """Assemble a combined transcript from all players, merging consecutive lines from the same speaker"""
     if not all_segments or len(all_segments) == 0:
         return None
     
-    # Get session context
-    context = add_session_context(session_dir, session_number, campaign_date)
+    # Get session context if parameters are provided
+    context = ""
+    if session_dir:
+        context = add_session_context(session_dir, session_number, campaign_date)
     
     # Flatten the list if it's a list of lists
     flat_segments = []
@@ -473,11 +482,38 @@ def assemble_combined_transcript(all_segments, session_dir, session_number=None,
     # Sort by start time
     sorted_segments = sorted(flat_segments, key=lambda x: x['start'])
     
-    # Create combined transcript with context at the beginning
-    combined_text = [context, "\n\nTRANSKRYPCJA SESJI:\n"]
+    # Create combined transcript with merged consecutive speaker lines
+    merged_lines = []
+    current_speaker = None
+    current_text = ""
     
     for segment in sorted_segments:
-        combined_text.append(f"{segment['character']}: {segment['text']}")
+        speaker = segment['character']
+        text = segment['text']
+        
+        if speaker == current_speaker:
+            # Same speaker continues, append to current text
+            current_text += " " + text
+        else:
+            # New speaker, add previous speaker's entry if it exists
+            if current_speaker:
+                merged_lines.append(f"{current_speaker}: {current_text}")
+            
+            # Start new entry
+            current_speaker = speaker
+            current_text = text
+    
+    # Don't forget the last speaker's entry
+    if current_speaker:
+        merged_lines.append(f"{current_speaker}: {current_text}")
+    
+    # Combine context with merged transcript
+    combined_text = []
+    if context:
+        combined_text.append(context)
+        combined_text.append("\n\nSESSION TRANSCRIPT:\n")
+    
+    combined_text.extend(merged_lines)
     
     return "\n".join(combined_text)
 
@@ -534,6 +570,13 @@ def process_session(session_dir):
 
 
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Process D&D session audio and generate transcripts")
+    parser.add_argument("--session_dir", type=str, help="Directory containing session audio files")
+    
+    args = parser.parse_args()
+    
     # Check GPU
     if torch.cuda.is_available():
         print(f"Using GPU: {torch.cuda.get_device_name(0)}")
@@ -541,4 +584,6 @@ if __name__ == "__main__":
     else:
         print("No GPU available, using CPU (this will be slow)")
     
-    process_session(SESSION_DIR) 
+    # Use provided session_dir or fall back to default SESSION_DIR
+    session_directory = Path(args.session_dir) if args.session_dir else SESSION_DIR
+    process_session(session_directory) 
