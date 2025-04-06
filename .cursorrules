@@ -4,8 +4,7 @@
 - DO NOT USE TRY BLOCKS. EVER!
 
 - be sure to use a python venv for this project
-- max file length 300 lines
-- max method length 100 lines
+- max python file length: 300 lines. after a file exceeds that length we need to refactor it!!!
 - after you finish writing a file, write a test for it and then run the test
 - then I want you to check in the file and the test (assuming it passes correctly) before continuing
 - after every change you make to a file, you need to update the corresponding test and then run it
@@ -13,6 +12,9 @@
 - before creating a new file, always check to see if a similar version exists that you could leverage
 - when modifying a file, make the minimum number of changes required needed to implement the functionality
 - cleanup dead code and unused scripts
+
+- DO NOT USE TRY BLOCKS. EVER!
+- max python file length: 300 lines. after a file exceeds that length we need to refactor it!!!
 
 ## Ask Questions First
 - Ask clarifying questions before making assumptions
@@ -23,6 +25,9 @@
 - Do not start implementing solutions without explicit confirmation
 - Never assume what the user wants - always ask first
 - Wait for clear instructions before creating files or writing code
+
+- DO NOT USE TRY BLOCKS. EVER!
+- max python file length: 300 lines. after a file exceeds that length we need to refactor it!!!
 
 ## YOLO Mode Rules
 - Always check existing files before creating new ones
@@ -38,6 +43,9 @@
 - Clearly warn about potentially dangerous operations
 - Be careful with operations involving user data
 
+- DO NOT USE TRY BLOCKS. EVER!
+- max python file length: 300 lines. after a file exceeds that length we need to refactor it!!!
+
 ## Testing Rules
 - Write tests alongside new functionality, not after
 - Aim for at least 80% test coverage for critical components
@@ -52,12 +60,18 @@
 - Test multithreaded/concurrent code with stress tests when applicable
 - Document test coverage gaps and assumptions
 
+- DO NOT USE TRY BLOCKS. EVER!
+- max python file length: 300 lines. after a file exceeds that length we need to refactor it!!!
+
 ## Code Style
 - Use descriptive variable and function names
 - Add comments for complex logic only
 - Follow language-specific conventions
 - Keep functions small and focused
 - Maintain consistent indentation (2 spaces for JS/TS, 4 for Python)
+
+- DO NOT USE TRY BLOCKS. EVER!
+- max python file length 300 lines. after a file exceeds that length we need to refactor it!!!
 
 ## Documentation
 - Provide minimal explanations unless requested
@@ -66,6 +80,7 @@
 - Explain design decisions upon request
 
 - DO NOT USE TRY BLOCKS. EVER!
+- max python file length 300 lines. after a file exceeds that length we need to refactor it!!!
 
 ## Response Format
 - Be concise and direct
@@ -73,17 +88,26 @@
 - Use bullet points for multiple suggestions
 - Highlight important information when needed
 
+- DO NOT USE TRY BLOCKS. EVER!
+- max python file length 300 lines. after a file exceeds that length we need to refactor it!!!
+
 ## Problem Solving
 - Start with simple solutions before complex ones
 - Suggest optimizations only when necessary
 - Consider edge cases in implementations
 - Verify solutions with examples when appropriate
 
+- DO NOT USE TRY BLOCKS. EVER!
+- max python file length 300 lines. after a file exceeds that length we need to refactor it!!!
+
 ## Project Structure
 - Respect existing file organization
 - Keep related code in the same files/modules
 - Follow existing naming conventions
 - Organize imports consistently
+
+- DO NOT USE TRY BLOCKS. EVER!
+- max python file length 300 lines. after a file exceeds that length we need to refactor it!!!
 
 ## Troubleshooting
 
@@ -92,3 +116,5 @@
 - **Audio Quality Issues**: For better transcription results, ensure your audio has good quality and minimal background noise.
 
 - DO NOT USE TRY BLOCKS. EVER!
+
+- max python file length 300 lines. after a file exceeds that length we need to refactor it!!!

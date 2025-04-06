@@ -390,7 +390,7 @@ def process_audio_file(file_path):
     
     # Visualize segments
     visualization_path = OUTPUT_DIR / f"{file_path.stem}_segments.png"
-    chunks_dir = visualize_segments(audio_data, sample_rate, segments, visualization_path)
+    #chunks_dir = visualize_segments(audio_data, sample_rate, segments, visualization_path)
     
     # Transcribe segments
     transcribed_segments = transcribe_segments_batch(segments, sample_rate, batch_size=4)
@@ -419,7 +419,7 @@ def process_audio_file(file_path):
     print(f"  - {json_output_path}")
     print(f"  - {text_output_path}")
     print(f"  - {visualization_path}")
-    print(f"  - {chunks_dir}/ (detailed visualizations)")
+    #print(f"  - {chunks_dir}/ (detailed visualizations)")
     
     return transcribed_segments
 
