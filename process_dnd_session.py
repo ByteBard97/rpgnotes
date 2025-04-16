@@ -17,14 +17,9 @@ from pathlib import Path
 from transformers import pipeline, AutoModelForSpeechSeq2Seq, AutoProcessor
 import re
 import matplotlib.pyplot as plt
+import config
 
 from audio_segmenter import AudioSegmenter
-
-# Configure paths
-SESSION_DIR = Path("recordings/friday_march_4")
-OUTPUT_DIR = SESSION_DIR / "output"
-TRANSCRIPTION_DIR = SESSION_DIR / "transcriptions"
-TEMP_DIR = Path("temp")
 
 # Player mapping (Discord username to character name)
 PLAYER_MAPPING = {
@@ -33,11 +28,6 @@ PLAYER_MAPPING = {
     "mden2": "Delphi, Aella, and Rheana"
     # Add more player mappings as needed
 }
-
-# Ensure output directories exist
-OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
-TRANSCRIPTION_DIR.mkdir(exist_ok=True, parents=True)
-TEMP_DIR.mkdir(exist_ok=True)
 
 class CustomProgressBar:
     """Simple progress bar for tracking processing progress"""
@@ -369,16 +359,11 @@ def extract_player_name(file_name):
     return None
 
 
-def get_character_name(player_name):
-    """Get character name from player mapping"""
-    return PLAYER_MAPPING.get(player_name, f"Unknown ({player_name})")
-
-
-def process_audio_file(file_path):
+def process_audio_file(file_path, player_mapping):
     """Process a single audio file and return segments with player info"""
     file_path = Path(file_path)
     player_name = extract_player_name(file_path.name)
-    character_name = get_character_name(player_name)
+    character_name = player_mapping.get(player_name, f"Unknown ({player_name})")
     
     print(f"\n=== Processing {file_path.name} ({character_name}) ===")
     
@@ -388,27 +373,50 @@ def process_audio_file(file_path):
         print("No speech segments detected. Skipping.")
         return None
     
+    # Get output paths from config
+    # Access via config module (which uses __getattr__)
+    output_dir = config.OUTPUT_DIR
+    session_transcriptions_dir = config.SESSION_TRANSCRIPTIONS_DIR
+
     # Visualize segments
-    visualization_path = OUTPUT_DIR / f"{file_path.stem}_segments.png"
-    #chunks_dir = visualize_segments(audio_data, sample_rate, segments, visualization_path)
-    
+    visualization_path = None
+    if output_dir and audio_data is not None:
+        visualization_path = output_dir / f"{file_path.stem}_segments.png"
+        # chunks_dir = visualize_segments(audio_data, sample_rate, segments, visualization_path)
+
     # Transcribe segments
     transcribed_segments = transcribe_segments_batch(segments, sample_rate, batch_size=4)
-    
+
     # Add player and character info to segments
     for segment in transcribed_segments:
         segment['player'] = player_name
         segment['character'] = character_name
-    
-    # Save JSON results
-    json_output_path = TRANSCRIPTION_DIR / f"{file_path.stem}.json"
-    with open(json_output_path, "w") as f:
-        json.dump(transcribed_segments, f, indent=2)
-    
-    # Save human-readable transcript
-    text_output_path = TRANSCRIPTION_DIR / f"{file_path.stem}.txt"
-    save_text_transcript(transcribed_segments, text_output_path, character_name)
-    
+
+    # Save JSON results to SESSION-SPECIFIC transcription location
+    json_output_path = None
+    if session_transcriptions_dir:
+        json_output_path = session_transcriptions_dir / f"{file_path.stem}.json"
+        if json_output_path:
+             try:
+                 with open(json_output_path, "w") as f:
+                     json.dump(transcribed_segments, f, indent=2)
+             except Exception as e:
+                  print(f"Error writing JSON {json_output_path}: {e}")
+        else:
+            print("Warning: Could not determine session transcription JSON output path.")
+
+    # Save human-readable transcript to SESSION-SPECIFIC transcription location
+    text_output_path = None
+    if session_transcriptions_dir:
+        text_output_path = session_transcriptions_dir / f"{file_path.stem}.txt"
+        if text_output_path:
+            try:
+                save_text_transcript(transcribed_segments, text_output_path, character_name)
+            except Exception as e:
+                print(f"Error writing text transcript {text_output_path}: {e}")
+        else:
+             print("Warning: Could not determine session transcription text output path.")
+
     # Calculate audio duration
     audio_duration = len(audio_data) / sample_rate if audio_data is not None else 0
     audio_minutes = audio_duration / 60
@@ -416,10 +424,9 @@ def process_audio_file(file_path):
     print(f"Processed {len(segments)} segments, transcribed {len(transcribed_segments)}")
     print(f"Audio duration: {audio_minutes:.2f} minutes")
     print(f"Results saved to:")
-    print(f"  - {json_output_path}")
-    print(f"  - {text_output_path}")
-    print(f"  - {visualization_path}")
-    #print(f"  - {chunks_dir}/ (detailed visualizations)")
+    if json_output_path: print(f"  - {json_output_path}")
+    if text_output_path: print(f"  - {text_output_path}")
+    if visualization_path: print(f"  - {visualization_path}")
     
     return transcribed_segments
 
@@ -515,7 +522,41 @@ def assemble_combined_transcript(all_segments, session_dir=None, session_number=
     
     combined_text.extend(merged_lines)
     
-    return "\n".join(combined_text)
+    # Get final output paths from config
+    # Save combined/llm files to the SESSION transcript directory
+    session_transcriptions_dir = config.SESSION_TRANSCRIPTIONS_DIR
+    if not session_transcriptions_dir:
+        print("Error: Session transcription output directory not configured.")
+        return "\n".join(combined_text) # Return text but don't save
+
+    # Ensure final output dir exists (initialize_config should handle this)
+    # session_transcriptions_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save combined transcript with simpler filenames
+    # session_name_for_file = re.sub(r'\W+', '_', config._loaded_config.get("session_name", "session")) # No longer needed for filename
+    combined_path = session_transcriptions_dir / "combined.txt"
+    llm_path = session_transcriptions_dir / "llm.txt"
+
+    final_transcript_text = "\n".join(combined_text)
+
+    # Write the files
+    try:
+        with open(combined_path, "w", encoding="utf-8") as f:
+            f.write(final_transcript_text)
+    except Exception as e:
+         print(f"Error writing combined transcript {combined_path}: {e}")
+
+    try:
+        with open(llm_path, "w", encoding="utf-8") as f:
+            f.write(final_transcript_text)
+    except Exception as e:
+        print(f"Error writing LLM transcript {llm_path}: {e}")
+
+    print(f"\nCombined transcript saved to:")
+    print(f"  - {combined_path}")
+    print(f"  - {llm_path} (LLM-friendly format)")
+
+    return final_transcript_text # Return the text as well
 
 
 def process_session(session_dir):
@@ -523,6 +564,21 @@ def process_session(session_dir):
     session_dir = Path(session_dir)
     print(f"=== Processing D&D Session in {session_dir} ===")
     
+    # --- Load Player Mapping --- 
+    player_mapping = {}
+    mapping_file = config.DISCORD_MAPPING_FILE # Get path from config
+    if mapping_file and mapping_file.exists():
+        try:
+            with open(mapping_file, 'r', encoding='utf-8') as f:
+                player_mapping = json.load(f)
+            print(f"Loaded player mapping from: {mapping_file}")
+        except json.JSONDecodeError:
+            print(f"Error: Invalid JSON in mapping file: {mapping_file}. Using empty mapping.")
+        except Exception as e:
+             print(f"Error loading mapping file {mapping_file}: {e}. Using empty mapping.")
+    else:
+        print(f"Warning: Player mapping file not found at {mapping_file}. Character names will be unknown.")
+
     # Find all FLAC files
     flac_files = list(session_dir.glob("*.flac"))
     if not flac_files:
@@ -533,34 +589,60 @@ def process_session(session_dir):
     for file in flac_files:
         size_mb = file.stat().st_size / (1024 * 1024)
         player_name = extract_player_name(file.name)
-        character_name = get_character_name(player_name)
+        character_name = player_mapping.get(player_name, f"Unknown ({player_name})")
         print(f"- {file.name}: {size_mb:.1f} MB ({character_name})")
     
+    # Get the directory for session transcripts
+    session_transcriptions_dir = config.SESSION_TRANSCRIPTIONS_DIR
+    if not session_transcriptions_dir:
+        print("Error: Session transcriptions directory not configured. Cannot check for existing transcripts.")
+        # Decide how to proceed: maybe exit, or maybe force re-transcription?
+        # For now, let's try to continue but things will likely fail later.
+        pass # Or potentially: return
+
     # Process each file
     start_time = time.time()
     all_segments = []
-    
+
     for file in flac_files:
-        segments = process_audio_file(file)
-        all_segments.append(segments)
-    
-    # Assemble combined transcript
-    combined_transcript = assemble_combined_transcript(all_segments, session_dir)
-    
-    if combined_transcript:
-        # Save combined transcript
-        combined_path = TRANSCRIPTION_DIR / "combined_transcript.txt"
-        with open(combined_path, "w", encoding="utf-8") as f:
-            f.write(combined_transcript)
-        
-        # Save LLM-friendly version (no timestamps)
-        llm_path = TRANSCRIPTION_DIR / "llm_transcript.txt"
-        with open(llm_path, "w", encoding="utf-8") as f:
-            f.write(combined_transcript)
-        
-        print(f"\nCombined transcript saved to:")
-        print(f"  - {combined_path}")
-        print(f"  - {llm_path} (LLM-friendly format)")
+        segments = None
+        json_output_path = None
+
+        # Construct expected output path BEFORE processing
+        if session_transcriptions_dir:
+            json_output_path = session_transcriptions_dir / f"{file.stem}.json"
+
+        # Check if the transcript already exists
+        if json_output_path and json_output_path.exists():
+            print(f"\n--- Found existing transcript for {file.name}. Loading... ---")
+            try:
+                with open(json_output_path, 'r', encoding='utf-8') as f:
+                    segments = json.load(f)
+                print(f"Successfully loaded {len(segments)} segments from {json_output_path}")
+                # Optional: Basic validation - check if it's a list
+                if not isinstance(segments, list):
+                    print(f"Warning: Loaded data from {json_output_path} is not a list. Re-transcribing.")
+                    segments = None # Force re-transcription
+            except json.JSONDecodeError:
+                print(f"Error: Invalid JSON in existing transcript {json_output_path}. Re-transcribing.")
+                segments = None # Force re-transcription
+            except Exception as e:
+                print(f"Error loading existing transcript {json_output_path}: {e}. Re-transcribing.")
+                segments = None # Force re-transcription
+
+        # If segments couldn't be loaded or didn't exist, process the audio file
+        if segments is None:
+            print(f"\n--- Processing transcript for {file.name}... --- ")
+            segments = process_audio_file(file, player_mapping)
+
+        # Add the loaded/processed segments to the list for final assembly
+        if segments: # Ensure we don't append None if processing failed
+             all_segments.append(segments)
+        else:
+            print(f"Warning: No segments obtained for {file.name}. It will be excluded from the combined transcript.")
+
+    # Assemble combined transcript (now saves to correct dir)
+    combined_transcript_text = assemble_combined_transcript(all_segments, session_dir=session_dir)
     
     # Calculate session stats
     elapsed_time = time.time() - start_time
@@ -571,19 +653,35 @@ def process_session(session_dir):
 
 if __name__ == "__main__":
     import argparse
-    
+    from pathlib import Path
+
+    # --- Argument Parsing ---
     parser = argparse.ArgumentParser(description="Process D&D session audio and generate transcripts")
-    parser.add_argument("--session_dir", type=str, help="Directory containing session audio files")
-    
+    # Make session_dir required
+    parser.add_argument("session_dir", type=str, help="Directory containing session audio files (e.g., recordings/session_name)")
+
     args = parser.parse_args()
-    
-    # Check GPU
+    session_directory = Path(args.session_dir).resolve()
+
+    if not session_directory.is_dir():
+        print(f"Error: Session directory not found: {session_directory}")
+        exit(1)
+
+    # --- Initialize Configuration EARLY ---
+    # This loads global config and merges session_config.json if found
+    # MUST be called before accessing config values implicitly via __getattr__
+    config.initialize_config(session_directory)
+
+    # --- Check GPU (can now potentially use config settings if needed) ---
+    # Example: Check a setting from config if it exists
+    # use_gpu = config.settings.get("use_gpu", torch.cuda.is_available()) 
+    # For now, keep original check:
     if torch.cuda.is_available():
         print(f"Using GPU: {torch.cuda.get_device_name(0)}")
         print(f"CUDA Version: {torch.version.cuda}")
     else:
         print("No GPU available, using CPU (this will be slow)")
-    
-    # Use provided session_dir or fall back to default SESSION_DIR
-    session_directory = Path(args.session_dir) if args.session_dir else SESSION_DIR
+
+    # --- Start Processing ---
+    # Pass the determined session directory to the main processing function
     process_session(session_directory) 

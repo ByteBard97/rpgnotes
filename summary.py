@@ -86,8 +86,12 @@ class SessionNotesGenerator:
             system_instruction=summary_prompt,
         )
 
+        # Read transcript content
+        with open(transcript_file, "r") as f:
+            transcript_content = f.read()
+
         summary_messages = [
-            {"role": "user", "parts": ["Please write a detailed and comprehensive summary."]},
+            {"role": "user", "parts": ["I will provide you with a D&D session transcript. Your task is to write a detailed and comprehensive summary of the session, capturing all important plot points, character interactions, and developments."]},
         ]
 
         if context_data:
@@ -100,8 +104,14 @@ class SessionNotesGenerator:
             with open(previous_summary_file, "r") as f:
                 summary_messages.append({"role": "user", "parts": ["Summary from the previous session for additional context:\n", f.read()]})
 
-        with open(transcript_file, "r") as f:
-            summary_messages.append({"role": "user", "parts": ["Transcript:\n", f.read()]})
+        # Add summary instructions before transcript
+        summary_messages.append({"role": "user", "parts": ["Below is the transcript of the session. Please read through it and create a detailed summary that captures all key events, character interactions, and important developments:"]})
+        
+        # Add the transcript
+        summary_messages.append({"role": "user", "parts": ["Transcript:\n", transcript_content]})
+        
+        # Add reminder after transcript
+        summary_messages.append({"role": "user", "parts": ["Now that you've read the transcript, please create a comprehensive summary of the session, focusing on plot progression, character development, important decisions, and any significant events that occurred."]})
 
         summary_response = model.generate_content(
             summary_messages,

@@ -7,11 +7,11 @@
         "context": "./context"
     },
     "files": {
-        "discord_mapping": "./discord_speaker_mapping.json",
-        "whisper_prompt": "./prompts/whisper_prompt.txt",
-        "summary_prompt": "./prompts/summary_prompt.txt",
-        "details_prompt": "./prompts/details_prompt.txt",
-        "template": "./template.md"
+        "discord_mapping_file": "./discord_speaker_mapping.json",
+        "whisper_prompt_file": "./prompts/whisper_prompt.txt",
+        "summary_prompt_file": "./prompts/summary_prompt.txt",
+        "details_prompt_file": "./prompts/details_prompt.txt",
+        "template_file": "./template.md"
     },
     "models": {
         "gemini": "gemini-1.5-pro"

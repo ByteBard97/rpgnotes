@@ -7,10 +7,7 @@ Game rules often include English words.
 The following names of characters, locations and monsters may appear:
 
 Party Characters
-    Astraeus
-    Delphi Silverstar
-    Aella Swiftstrike
-    Rhaena
+[Read the information on the PCs]
 
 The Five Gods
     Kyrah
