@@ -38,6 +38,22 @@ A PowerShell script is provided to simplify the execution process. It automatica
 > Press `Y` and Enter to confirm. You should only need to do this once.
 
 ---
+## Process Latest Session (Convenience Script)
+
+For quick processing of the most recent session, use the convenience script:
+
+```powershell
+.\run_latest_session.ps1
+```
+
+This script will:
+- Automatically find the newest folder in the `recordings` directory
+- Show you which session it found and ask for confirmation
+- Run the session processing script on that folder
+
+This is perfect for when you just recorded a session and want to quickly process it without having to remember the exact folder name.
+
+---
 ## Manual Execution (Advanced)
 If you prefer to run the script manually, follow these steps:
 1. Deactivate any active Conda environment (`conda deactivate`).
