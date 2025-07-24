@@ -59,20 +59,21 @@ class CustomProgressBar:
 
 
 def load_audio(file_path):
-    """Load audio file with proper error handling"""
+    """Load audio file using the more-robust AudioProcessor helper (pydub → FFmpeg)."""
     print(f"Loading audio file: {file_path}")
-    try:
-        audio_data, sample_rate = sf.read(file_path)
-        
-        # Convert stereo to mono if needed
-        if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
-            audio_data = np.mean(audio_data, axis=1)
-            
-        return audio_data, sample_rate
-        
-    except Exception as e:
-        print(f"Error loading audio: {e}")
-        return None, None
+
+    # Attempt to use pydub (FFmpeg) first for robust decoding
+    from pydub import AudioSegment  # Local import
+    print("Loading with pydub/FFmpeg")
+    audio = AudioSegment.from_file(file_path)
+
+    # Convert to numpy array and down-mix if multi-channel
+    samples = np.array(audio.get_array_of_samples())
+    if audio.channels > 1:
+        samples = samples.reshape((-1, audio.channels)).mean(axis=1)
+
+    samples = samples.astype(np.float32) / (2 ** 15 if audio.sample_width == 2 else 2 ** 31)
+    return samples, audio.frame_rate
 
 
 def segment_audio(file_path):
@@ -179,43 +180,39 @@ def transcribe_segments_batch(segments, sample_rate, model_id="openai/whisper-la
             segment_audio = segment['audio_data']
             
             # Prepare input for the pipeline
-            inputs = {"array": segment_audio, "sampling_rate": sample_rate}
+            input_features = {"array": segment_audio, "sampling_rate": sample_rate}
             
             # Process the segment
-            try:
-                result = pipe(
-                    inputs,
-                    return_timestamps=True,
-                    generate_kwargs={"language": "en", "task": "transcribe"}
-                )
-                
-                # Get the text
-                text = result.get("text", "").strip()
-                
-                # Clean up text
-                text = re.sub(r'\b(\w+)(\s+\1){2,}\b', r'\1', text)  # Remove repetitive words
-                text = re.sub(r'\byou\s+you\s+you(\s+you)*\b', r'you', text)  # Fix "you you you"
-                text = re.sub(r'\b(\w+)(-\1){1,}\b', r'\1', text)  # Fix stutter patterns
-                text = re.sub(r'\s{2,}', ' ', text)  # Remove excessive spacing
-                
-                # Skip empty segments
-                if not text or text.isspace():
-                    segments_pbar.update(1)
-                    continue
-                
-                # Create segment with transcription (without no_speech_prob)
-                transcribed_segment = {
-                    "id": segment_id,
-                    "text": text,
-                    "start": start_time,
-                    "end": end_time,
-                    "duration": duration
-                }
-                
-                transcribed_segments.append(transcribed_segment)
-                
-            except Exception as e:
-                print(f"\nError transcribing segment {segment_id}: {e}")
+            result = pipe(
+                input_features,
+                return_timestamps=True,
+                generate_kwargs={"language": "en", "task": "transcribe"}
+            )
+            
+            # Get the text
+            text = result.get("text", "").strip()
+            
+            # Clean up text
+            text = re.sub(r'\b(\w+)(\s+\1){2,}\b', r'\1', text)  # Remove repetitive words
+            text = re.sub(r'\byou\s+you\s+you(\s+you)*\b', r'you', text)  # Fix "you you you"
+            text = re.sub(r'\b(\w+)(-\1){1,}\b', r'\1', text)  # Fix stutter patterns
+            text = re.sub(r'\s{2,}', ' ', text)  # Remove excessive spacing
+            
+            # Skip empty segments
+            if not text or text.isspace():
+                segments_pbar.update(1)
+                continue
+            
+            # Create segment with transcription (without no_speech_prob)
+            transcribed_segment = {
+                "id": segment_id,
+                "text": text,
+                "start": start_time,
+                "end": end_time,
+                "duration": duration
+            }
+            
+            transcribed_segments.append(transcribed_segment)
             
             # Update progress
             segments_pbar.update(1)
@@ -397,11 +394,8 @@ def process_audio_file(file_path, player_mapping):
     if session_transcriptions_dir:
         json_output_path = session_transcriptions_dir / f"{file_path.stem}.json"
         if json_output_path:
-             try:
-                 with open(json_output_path, "w") as f:
-                     json.dump(transcribed_segments, f, indent=2)
-             except Exception as e:
-                  print(f"Error writing JSON {json_output_path}: {e}")
+             with open(json_output_path, "w") as f:
+                 json.dump(transcribed_segments, f, indent=2)
         else:
             print("Warning: Could not determine session transcription JSON output path.")
 
@@ -410,10 +404,7 @@ def process_audio_file(file_path, player_mapping):
     if session_transcriptions_dir:
         text_output_path = session_transcriptions_dir / f"{file_path.stem}.txt"
         if text_output_path:
-            try:
-                save_text_transcript(transcribed_segments, text_output_path, character_name)
-            except Exception as e:
-                print(f"Error writing text transcript {text_output_path}: {e}")
+            save_text_transcript(transcribed_segments, text_output_path, character_name)
         else:
              print("Warning: Could not determine session transcription text output path.")
 
@@ -451,7 +442,7 @@ def add_session_context(session_dir, session_number=None, campaign_date=None):
     context.append("\nCAMPAIGN CONTEXT:")
     # This can be loaded from a separate file or entered manually
     # For now, we'll add a placeholder
-    context.append("The heroes of the Prophecy continue their journey in the world of Thylea, fighting against the Titans.")
+    context.append("The heroes of the Adventure continue their journey.")
 
     # Add character information from file if it exists
     character_file = session_dir / "characters.txt"
@@ -540,17 +531,11 @@ def assemble_combined_transcript(all_segments, session_dir=None, session_number=
     final_transcript_text = "\n".join(combined_text)
 
     # Write the files
-    try:
-        with open(combined_path, "w", encoding="utf-8") as f:
-            f.write(final_transcript_text)
-    except Exception as e:
-         print(f"Error writing combined transcript {combined_path}: {e}")
+    with open(combined_path, "w", encoding="utf-8") as f:
+        f.write(final_transcript_text)
 
-    try:
-        with open(llm_path, "w", encoding="utf-8") as f:
-            f.write(final_transcript_text)
-    except Exception as e:
-        print(f"Error writing LLM transcript {llm_path}: {e}")
+    with open(llm_path, "w", encoding="utf-8") as f:
+        f.write(final_transcript_text)
 
     print(f"\nCombined transcript saved to:")
     print(f"  - {combined_path}")
@@ -568,14 +553,9 @@ def process_session(session_dir):
     player_mapping = {}
     mapping_file = config.DISCORD_MAPPING_FILE # Get path from config
     if mapping_file and mapping_file.exists():
-        try:
-            with open(mapping_file, 'r', encoding='utf-8') as f:
-                player_mapping = json.load(f)
-            print(f"Loaded player mapping from: {mapping_file}")
-        except json.JSONDecodeError:
-            print(f"Error: Invalid JSON in mapping file: {mapping_file}. Using empty mapping.")
-        except Exception as e:
-             print(f"Error loading mapping file {mapping_file}: {e}. Using empty mapping.")
+        with open(mapping_file, 'r', encoding='utf-8') as f:
+            player_mapping = json.load(f)
+        print(f"Loaded player mapping from: {mapping_file}")
     else:
         print(f"Warning: Player mapping file not found at {mapping_file}. Character names will be unknown.")
 
@@ -615,19 +595,12 @@ def process_session(session_dir):
         # Check if the transcript already exists
         if json_output_path and json_output_path.exists():
             print(f"\n--- Found existing transcript for {file.name}. Loading... ---")
-            try:
-                with open(json_output_path, 'r', encoding='utf-8') as f:
-                    segments = json.load(f)
-                print(f"Successfully loaded {len(segments)} segments from {json_output_path}")
-                # Optional: Basic validation - check if it's a list
-                if not isinstance(segments, list):
-                    print(f"Warning: Loaded data from {json_output_path} is not a list. Re-transcribing.")
-                    segments = None # Force re-transcription
-            except json.JSONDecodeError:
-                print(f"Error: Invalid JSON in existing transcript {json_output_path}. Re-transcribing.")
-                segments = None # Force re-transcription
-            except Exception as e:
-                print(f"Error loading existing transcript {json_output_path}: {e}. Re-transcribing.")
+            with open(json_output_path, 'r', encoding='utf-8') as f:
+                segments = json.load(f)
+            print(f"Successfully loaded {len(segments)} segments from {json_output_path}")
+            # Optional: Basic validation - check if it's a list
+            if not isinstance(segments, list):
+                print(f"Warning: Loaded data from {json_output_path} is not a list. Re-transcribing.")
                 segments = None # Force re-transcription
 
         # If segments couldn't be loaded or didn't exist, process the audio file

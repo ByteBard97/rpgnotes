@@ -1,0 +1,23 @@
+# Audio files
+*.wav
+*.flac
+
+# Main directory for session recordings
+recordings/
+
+# Python virtual environment and cache
+venv/
+__pycache__/
+.pytest_cache/
+
+# Version control
+.git/
+
+# Script outputs (transcripts, logs, potentially images)
+output/
+
+# Temporary files
+temp/
+
+# Large datasets for testing
+test_data/
