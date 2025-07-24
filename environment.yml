@@ -1,0 +1,34 @@
+name: rpgnotes
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - ffmpeg
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=11.8 # Matches the version from your logs
+  - numpy
+  - soundfile
+  - pydub
+  - transformers
+  - matplotlib
+  - safetensors
+  - ipykernel
+  # The following are from your requirements.txt, installed via pip
+  # if a conda version is not readily available or if they are simple packages.
+  - pip:
+    - audiostretchy
+    - more-itertools
+    - numpy
+    - openai-whisper
+    - soundfile
+    - tiktoken
+    - torch
+    - torchaudio
+    - torchvision
+    - transformers 
