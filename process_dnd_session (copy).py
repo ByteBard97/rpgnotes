@@ -17,6 +17,7 @@ from pathlib import Path
 from transformers import pipeline, AutoModelForSpeechSeq2Seq, AutoProcessor
 import re
 import matplotlib.pyplot as plt
+import librosa
 import config
 
 from audio_segmenter import AudioSegmenter
@@ -58,179 +59,159 @@ class CustomProgressBar:
         print(f"\r{self.desc}: {self.total}/{self.total} [100.0%] | {elapsed:.1f}s | Complete")
 
 
-def load_audio(file_path):
-    """Load audio file using the more-robust AudioProcessor helper (pydub → FFmpeg)."""
-    print(f"Loading audio file: {file_path}")
-
-    # Attempt to use pydub (FFmpeg) first for robust decoding
-    from pydub import AudioSegment  # Local import
-    print("Loading with pydub/FFmpeg")
-    audio = AudioSegment.from_file(file_path)
-
-    # Convert to numpy array and down-mix if multi-channel
-    samples = np.array(audio.get_array_of_samples())
-    if audio.channels > 1:
-        samples = samples.reshape((-1, audio.channels)).mean(axis=1)
-
-    samples = samples.astype(np.float32) / (2 ** 15 if audio.sample_width == 2 else 2 ** 31)
-    return samples, audio.frame_rate
-
-
-def segment_audio(file_path):
-    """Segment audio file to detect speech portions"""
-    print("Segmenting audio to identify speech...")
-    
-    # Initialize segmenter with optimized parameters
-    segmenter = AudioSegmenter(
-        amplitude_threshold=0.005,  # Optimal threshold from testing
-        min_segment_length=0.1,     # Catch short speech bursts
-        min_silence_length=0.3,     # Detect short silences
-        merge_threshold=1.2,        # Merge segments that are close
-        padding=0.2                 # Add context to segments
-    )
-    
-    # Load the audio file
-    audio_data, sample_rate = load_audio(file_path)
-    if audio_data is None:
-        return [], None, None
-    
-    # Get raw segments
-    raw_segments = segmenter.detect_segments(audio_data, sample_rate)
-    
-    # Merge close segments
-    merged_segments = segmenter.merge_close_segments(raw_segments)
-    
-    # Add segment IDs and prepare audio data for each segment
-    audio_segments = []
-    for i, segment in enumerate(merged_segments):
-        segment_id = i
-        start_time = segment['start']
-        end_time = segment['end']
-        duration = end_time - start_time
-        
-        # Calculate sample indices
-        start_sample = int(start_time * sample_rate)
-        end_sample = int(end_time * sample_rate)
-        
-        # Ensure we don't exceed array bounds
-        start_sample = max(0, start_sample)
-        end_sample = min(len(audio_data), end_sample)
-        
-        # Extract segment audio data
-        segment_audio = audio_data[start_sample:end_sample]
-        
-        # Create segment with audio data
-        audio_segments.append({
-            'id': segment_id,
-            'start': start_time,
-            'end': end_time,
-            'duration': duration,
-            'audio_data': segment_audio
-        })
-    
-    print(f"Found {len(audio_segments)} speech segments")
-    return audio_segments, audio_data, sample_rate
-
-
-def transcribe_segments_batch(segments, sample_rate, model_id="openai/whisper-large-v3", batch_size=4):
-    """Transcribe audio segments in batches using a simpler approach"""
-    print(f"\nTranscribing {len(segments)} segments using batched processing...")
+def transcribe_segments_batch(segments, sample_rate, model_id="openai/whisper-large-v3", batch_size=8):
+    """Transcribe audio segments in batches with manual processing for stability."""
+    print(f"\nTranscribing {len(segments)} segments using manual batching (batch size: {batch_size})...")
     
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     
     print(f"Loading Whisper model {model_id} on {device}...")
     
-    # Load the model and processor
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_id,
-        torch_dtype=torch_dtype,
-        low_cpu_mem_usage=True,
-        use_safetensors=True
-    )
-    model.to(device)
+        model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True, use_safetensors=True
+    ).to(device)
     
     processor = AutoProcessor.from_pretrained(model_id)
-    
-    # Create the pipeline
-    pipe = pipeline(
-        "automatic-speech-recognition",
-        model=model,
-        tokenizer=processor.tokenizer,
-        feature_extractor=processor.feature_extractor,
-        torch_dtype=torch_dtype,
-        device=device,
-    )
-    
-    # Transcribe in batches
-    transcribed_segments = []
-    segments_pbar = CustomProgressBar(total=len(segments), desc="Transcribing segments", unit="segment")
-    
-    # Process in batches
+
+    transcribed_texts = []
+    pbar = CustomProgressBar(total=len(segments), desc="Transcribing segments", unit="segment")
+
+    # Manually process in batches
     for start_idx in range(0, len(segments), batch_size):
         end_idx = min(start_idx + batch_size, len(segments))
-        current_batch = segments[start_idx:end_idx]
+        current_batch_segments = segments[start_idx:end_idx]
         
-        # Process each segment in the batch one by one
-        for segment in current_batch:
-            segment_id = segment['id']
-            start_time = segment['start']
-            end_time = segment['end']
-            duration = segment['duration']
-            segment_audio = segment['audio_data']
-            
-            # Prepare input for the pipeline
-            input_features = {"array": segment_audio, "sampling_rate": sample_rate}
-            
-            # Process the segment
-            result = pipe(
-                input_features,
-                return_timestamps=True,
-                generate_kwargs={
-                    "language": "en", 
-                    "task": "transcribe",
-                    # These parameters help reduce repetitive loops
-                    "compression_ratio_threshold": 2.0,
-                    "logprob_threshold": -0.8,
-                    "temperature": 0.0
-                }
-            )
-            
-            # Get the text
-            text = result.get("text", "").strip()
-            
-            # Clean up text
-            text = re.sub(r'\b(\w+)(\s+\1){2,}\b', r'\1', text)  # Remove repetitive words
-            text = re.sub(r'\byou\s+you\s+you(\s+you)*\b', r'you', text)  # Fix "you you you"
-            text = re.sub(r'\b(\w+)(-\1){1,}\b', r'\1', text)  # Fix stutter patterns
-            text = re.sub(r'\s{2,}', ' ', text)  # Remove excessive spacing
-            
-            # Skip empty segments
-            if not text or text.isspace():
-                segments_pbar.update(1)
-                continue
-            
-            # Create segment with transcription (without no_speech_prob)
-            transcribed_segment = {
-                "id": segment_id,
-                "text": text,
-                "start": start_time,
-                "end": end_time,
-                "duration": duration
-            }
-            
-            transcribed_segments.append(transcribed_segment)
-            
-            # Update progress
-            segments_pbar.update(1)
-            
-        # Force CUDA cache cleanup after each batch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        # Prepare audio for the current batch
+        audio_inputs = [seg['audio_data'] for seg in current_batch_segments]
+        
+        # Preprocess the batch
+        inputs = processor(audio_inputs, sampling_rate=sample_rate, return_tensors="pt", padding=True)
+        input_features = inputs.input_features.to(device, dtype=torch_dtype)
+
+        # Generate transcriptions for the batch
+        with torch.no_grad():
+            generated_ids = model.generate(input_features, language="en", task="transcribe")
+        
+        # Decode and store results for the batch
+        batch_texts = processor.batch_decode(generated_ids, skip_special_tokens=True)
+        transcribed_texts.extend(batch_texts)
+
+        pbar.update(len(current_batch_segments))
+
+    pbar.close()
+
+    # Assemble final results
+    transcribed_segments = []
+    for i, text in enumerate(transcribed_texts):
+        original_segment = segments[i]
+        
+        text = text.strip()
+        # Clean up text
+        text = re.sub(r'\b(\w+)(\s+\1){2,}\b', r'\1', text)  # Remove repetitive words
+        text = re.sub(r'\byou\s+you\s+you(\s+you)*\b', r'you', text)  # Fix "you you you"
+        text = re.sub(r'\b(\w+)(-\1){1,}\b', r'\1', text)  # Fix stutter patterns
+        text = re.sub(r'\s{2,}', ' ', text)  # Remove excessive spacing
+
+        # Skip empty segments
+        if not text or text.isspace():
+            continue
+        
+        # Create segment with transcription
+        transcribed_segment = {
+            "id": original_segment['id'],
+            "text": text,
+            "start": original_segment['start'],
+            "end": original_segment['end'],
+            "duration": original_segment['duration']
+        }
+        
+        transcribed_segments.append(transcribed_segment)
+        
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
-    segments_pbar.close()
     print(f"Completed transcription of {len(transcribed_segments)} segments")
     return transcribed_segments
+
+
+def process_audio_in_chunks(file_path, segmenter, chunk_duration_s=600):
+    """
+    Load and segment audio in chunks to avoid memory issues with large files.
+    Returns a list of all detected speech segments with correct timestamps.
+    """
+    print(f"Processing audio in {chunk_duration_s // 60}-minute chunks to conserve memory...")
+    
+    try:
+        from pydub import AudioSegment
+        from pydub.utils import mediainfo
+    except ImportError:
+        print("Error: pydub is required for chunked processing. Please install it.")
+        return [], None, None
+        
+    info = mediainfo(file_path)
+    original_sr = int(info['sample_rate'])
+    target_sr = 16000
+    
+    audio = AudioSegment.from_file(file_path)
+    duration_s = len(audio) / 1000.0
+    
+    all_segments_with_audio = []
+    
+    pbar = CustomProgressBar(total=int(duration_s), desc="Segmenting audio", unit="s")
+
+    for start_s in range(0, int(duration_s), chunk_duration_s):
+        end_s = min(start_s + chunk_duration_s, duration_s)
+        
+        # Get chunk from pydub audio
+        chunk = audio[start_s * 1000:end_s * 1000]
+        
+        # Convert to numpy array
+        samples = np.array(chunk.get_array_of_samples())
+        if chunk.channels > 1:
+            samples = samples.reshape((-1, chunk.channels)).mean(axis=1)
+            
+        # Normalize to float32
+        samples = samples.astype(np.float32) / (2 ** 15 if chunk.sample_width == 2 else 2 ** 31)
+        
+        # Resample
+        if original_sr != target_sr:
+            samples = librosa.resample(samples, orig_sr=original_sr, target_sr=target_sr)
+        
+        # Detect segments in the current chunk
+        raw_chunk_segments = segmenter.detect_segments(samples, target_sr)
+
+        # Adjust timestamps to be relative to the full audio
+        for seg in raw_chunk_segments:
+            seg['start'] += start_s
+            seg['end'] += start_s
+            
+            # Extract audio data for this specific segment
+            start_sample = int((seg['start'] - start_s) * target_sr)
+            end_sample = int((seg['end'] - start_s) * target_sr)
+            seg['audio_data'] = samples[start_sample:end_sample]
+
+        all_segments_with_audio.extend(raw_chunk_segments)
+        pbar.update(chunk_duration_s)
+        
+    pbar.close()
+    
+    # Merge close segments across the entire timeline
+    merged_segments = segmenter.merge_close_segments(all_segments_with_audio)
+
+    # Final pass to add IDs and ensure audio data is present
+    final_segments = []
+    for i, seg in enumerate(merged_segments):
+        final_segments.append({
+            'id': i,
+            'start': seg['start'],
+            'end': seg['end'],
+            'duration': seg['end'] - seg['start'],
+            'audio_data': seg['audio_data']
+        })
+
+    print(f"Found {len(final_segments)} speech segments in total.")
+    return final_segments, target_sr
 
 
 def visualize_segments(audio_data, sample_rate, segments, output_path):
@@ -371,25 +352,28 @@ def process_audio_file(file_path, player_mapping):
     
     print(f"\n=== Processing {file_path.name} ({character_name}) ===")
     
-    # Segment the audio
-    segments, audio_data, sample_rate = segment_audio(file_path)
+    # Initialize a single segmenter instance
+    segmenter = AudioSegmenter(
+        amplitude_threshold=0.005,
+        min_segment_length=0.1,
+        min_silence_length=0.3,
+        merge_threshold=1.2,
+        padding=0.2
+    )
+
+    # Process audio using the new chunk-based method
+    segments, sample_rate = process_audio_in_chunks(file_path, segmenter)
+    
     if not segments:
         print("No speech segments detected. Skipping.")
         return None
     
     # Get output paths from config
-    # Access via config module (which uses __getattr__)
     output_dir = config.OUTPUT_DIR
     session_transcriptions_dir = config.SESSION_TRANSCRIPTIONS_DIR
 
-    # Visualize segments
-    visualization_path = None
-    if output_dir and audio_data is not None:
-        visualization_path = output_dir / f"{file_path.stem}_segments.png"
-        # chunks_dir = visualize_segments(audio_data, sample_rate, segments, visualization_path)
-
     # Transcribe segments
-    transcribed_segments = transcribe_segments_batch(segments, sample_rate, batch_size=4)
+    transcribed_segments = transcribe_segments_batch(segments, sample_rate)
 
     # Add player and character info to segments
     for segment in transcribed_segments:
@@ -415,16 +399,21 @@ def process_audio_file(file_path, player_mapping):
         else:
              print("Warning: Could not determine session transcription text output path.")
 
-    # Calculate audio duration
-    audio_duration = len(audio_data) / sample_rate if audio_data is not None else 0
-    audio_minutes = audio_duration / 60
-    
+    # Audio duration is now known before processing, but we can state it again
+    try:
+        from pydub.utils import mediainfo
+        info = mediainfo(str(file_path))
+        audio_duration = float(info['duration'])
+        audio_minutes = audio_duration / 60
+        print(f"Audio duration: {audio_minutes:.2f} minutes")
+    except Exception:
+        # Fallback if mediainfo fails
+        print("Could not calculate exact audio duration.")
+
     print(f"Processed {len(segments)} segments, transcribed {len(transcribed_segments)}")
-    print(f"Audio duration: {audio_minutes:.2f} minutes")
     print(f"Results saved to:")
     if json_output_path: print(f"  - {json_output_path}")
     if text_output_path: print(f"  - {text_output_path}")
-    if visualization_path: print(f"  - {visualization_path}")
     
     return transcribed_segments
 
